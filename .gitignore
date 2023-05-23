@@ -1,0 +1,9 @@
+
+*.jpg
+*.tif
+*.pth
+*.png
+*.npy
+datasets/
+*.pt
+
