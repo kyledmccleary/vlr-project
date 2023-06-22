@@ -55,6 +55,7 @@ parser.add_argument('-gm', '--getmonthlies', type=bool, default = False)
 parser.add_argument('-c', '--crs', type=str, default = None)
 parser.add_argument('-cc', '--cloud_cover_max',type=float, default = 50.0)
 parser.add_argument('-ccgt', '--cloud_cover_min', type=float, default = 0.0)
+parser.add_argument('-ba','--bands',type=str,nargs='+',default =['B4','B3','B2'])
 
 args = parser.parse_args()      
 scale = args.scale
@@ -69,7 +70,7 @@ else:
     seed = np.random.randint(100000)
 
 
-bands = ['B4','B3','B2']
+bands = args.bands
 region_filter, rect = getRegionFilterFromBounds(args.bounds,getRect=True)
 date_filter = getDateFilter(args.idate, args.fdate)
 

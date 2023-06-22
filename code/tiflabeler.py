@@ -9,10 +9,10 @@ from multiprocessing import Pool, cpu_count
 # box_path = 'florida_algo_boxes.csv'
 box_path = 'outboxes.npy'
 box_crs = 'EPSG:4326'
-infolder = 'lt50cc_test2'
-label_path = 'datasets/lt50cc/test/labels'
-out_path = 'datasets/lt50cc/test/images'
-thumb_path = 'datasets/lt50cc/test/thumbs'
+infolder = 'NIR_test'
+label_path = 'datasets/NIR/test/labels'
+out_path = 'datasets/NIR/test/images'
+thumb_path = 'datasets/NIR/test/thumbs'
 batch_size = 1000
 delete = False
 
