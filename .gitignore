@@ -6,5 +6,7 @@
 *.npy
 datasets/
 *.pt
+*.zip
+*.yaml
 
 
