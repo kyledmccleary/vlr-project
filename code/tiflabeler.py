@@ -9,10 +9,10 @@ from multiprocessing import Pool, cpu_count
 # box_path = 'florida_algo_boxes.csv'
 box_path = 'outboxes.npy'
 box_crs = 'EPSG:4326'
-infolder = 'NIR_test'
-label_path = 'datasets/NIR/test/labels'
-out_path = 'datasets/NIR/test/images'
-thumb_path = 'datasets/NIR/test/thumbs'
+infolder = 'landsat_images'
+label_path = 'datasets/florida/test/labels'
+out_path = 'datasets/florida/test/images'
+thumb_path = 'datasets/florida/test/thumbs'
 batch_size = 1000
 delete = False
 
@@ -76,7 +76,7 @@ def readGEOTiff(path):
             crs = 'EPSG:3857'
             im = np.uint8(src.read().transpose((1,2,0)))
         if path.startswith('l8'):
-            # crs = 'EPSG:3857'
+            crs = 'EPSG:3857'
             im = np.uint8(src.read().transpose((1,2,0)))
         im = cv2.cvtColor(im,cv2.COLOR_RGB2BGR)
         im_width = src.width

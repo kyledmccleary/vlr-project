@@ -1,0 +1,39 @@
+train: ./fl/images/train
+val: ./fl/images/val
+
+#class names
+names:
+    0: pensacola
+    1: panama_city
+    2: tallahassee
+    3: orlando
+    4: tampa
+    5: space_coast
+    6: jacksonville
+    7: cedar_key
+    8: lake_okeechobee
+    9: fort_myers
+    10: everglades
+    11: miami
+    12: west_palm_beach
+    13: fl_keys
+    14: west_grand_bahama
+    15: east_grand_bahama
+    16: north_bahamas
+    17: gargano
+    18: toe
+    19: heel
+    20: calf
+    21: knee
+    22: east_sicily
+    23: west_sicily
+    24: tunis
+    25: south_sardinia
+    26: north_sardinia
+    27: corsica
+    28: shin
+    29: rome
+    30: cilento
+    31: crotone
+    32: parks
+    33: chioggia
