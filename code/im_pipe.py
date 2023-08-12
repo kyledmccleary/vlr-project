@@ -91,7 +91,7 @@ def check_region(im):
     print('Checking regions')
     model_path = RC_MODEL_PATH
     model_dict = torch.load(model_path)
-    model_state_dict = model_dict['model_state_dict']
+    model_state_dict = model_dict#model_dict['model_state_dict']
     model = EfficientNet.from_name('efficientnet-b0')
     model._fc = torch.nn.Linear(1280, 16, bias=True)
     model.load_state_dict(model_state_dict)
