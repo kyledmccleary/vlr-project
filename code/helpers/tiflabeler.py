@@ -16,10 +16,17 @@ args = parser.parse_args()
 # box_path = 'florida_algo_boxes.csv'
 box_path = args.key + '_outboxes.npy'
 box_crs = 'EPSG:4326'
+<<<<<<< HEAD:code/helpers/tiflabeler.py
 infolder = 'F:\\landsat_images\\' + args.key
 label_path = 'datasets/' + args.key + '/train/labels'
 out_path = 'datasets/' + args.key + '/train/images'
 thumb_path = 'datasets/' + args.key + '/train/thumbs'
+=======
+infolder = 'landsat_images'
+label_path = 'datasets/florida/test/labels'
+out_path = 'datasets/florida/test/images'
+thumb_path = 'datasets/florida/test/thumbs'
+>>>>>>> c423822f24984b7a76988adc8e4eb9df8b3bbee8:code/tiflabeler.py
 batch_size = 1000
 delete = False
 
@@ -83,7 +90,7 @@ def readGEOTiff(path):
             crs = 'EPSG:3857'
             im = np.uint8(src.read().transpose((1,2,0)))
         if path.startswith('l8'):
-            # crs = 'EPSG:3857'
+            crs = 'EPSG:3857'
             im = np.uint8(src.read().transpose((1,2,0)))
         im = cv2.cvtColor(im,cv2.COLOR_RGB2BGR)
         im_width = src.width

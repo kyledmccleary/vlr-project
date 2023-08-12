@@ -3,7 +3,7 @@ from ultralytics import YOLO
 model = YOLO('best.pt')
 
 if __name__ == '__main__':
-    results = model.val(data='yolov8n_cc5.yaml')
+    results = model.val(data='yolov8n_it_grid.yaml')
     # results = model.train(
     #     data='yolov8n_it_hand_val.yaml',
     #     degrees = 180,
