@@ -18,15 +18,14 @@ def getRegionFilterFromBounds(bounds, getRect=True):
         return region_filter
   
 def getDateFilter(i_date, f_date):
-    date_filter = ee.Filter.date(i_date,f_date)
+    date_filter = ee.Filter.date(i_date,opt_end=f_date)
     return date_filter
     
-def getCollection(landsat,region_filter,date_filter,bands=['B4','B3','B2'], cloud_cover_min=0, cloud_cover_max = 50, date_sort=True):
+def getCollection(landsat,region_filter,date_filter,bands=['B4','B3','B2'], cloud_cover_max = 50, date_sort=True):
     collection_string = 'LANDSAT/LC0' + landsat + '/C02/T1_TOA'
     collection = ee.ImageCollection(collection_string)
     collection = collection.filter(region_filter).filter(date_filter)
-    collection = collection.filter(ee.Filter.lt('CLOUD_COVER',cloud_cover_max))
-    collection = collection.filter(ee.Filter.gte('CLOUD_COVER',cloud_cover_min))
+    collection = collection.filter(ee.Filter.lt('CLOUD_COVER_LAND',cloud_cover_max))
     collection = collection.select(bands)
     if date_sort:
         collection = collection.sort('DATE_ACQUIRED')       
@@ -53,9 +52,6 @@ parser.add_argument('-si', '--startindex',type=int,default=0)
 parser.add_argument('-se', '--seed', type=int,default = None)
 parser.add_argument('-gm', '--getmonthlies', type=bool, default = False)
 parser.add_argument('-c', '--crs', type=str, default = None)
-parser.add_argument('-cc', '--cloud_cover_max',type=float, default = 50.0)
-parser.add_argument('-ccgt', '--cloud_cover_min', type=float, default = 0.0)
-parser.add_argument('-ba','--bands',type=str,nargs='+',default =['B4','B3','B2'])
 
 args = parser.parse_args()      
 scale = args.scale
@@ -70,7 +66,7 @@ else:
     seed = np.random.randint(100000)
 
 
-bands = args.bands
+bands = ['B4','B3','B2']
 region_filter, rect = getRegionFilterFromBounds(args.bounds,getRect=True)
 date_filter = getDateFilter(args.idate, args.fdate)
 
@@ -93,7 +89,7 @@ def makeRectangle(point):
 
 if not args.mosaic:
     collection = getCollection(args.landsat, region_filter, date_filter,
-                           bands=bands, cloud_cover_min = args.cloud_cover_min, cloud_cover_max = args.cloud_cover_max, date_sort=True)
+                           bands=bands, cloud_cover_max = 50, date_sort=True)
     collection_size = collection.size().getInfo()
     if collection_size < max_ims:
         max_ims = collection_size
@@ -112,7 +108,7 @@ else:
             fdate = args.idate + '-' + str(i) + '-' + days[i-1]
             date_filter = ee.Filter.date(idate,fdate)
             collection = getCollection(args.landsat, region_filter, date_filter,
-                                       bands=bands, cloud_cover_min = args.cloud_cover_min, cloud_cover_max=args.cloud_cover_max, date_sort=False)
+                                       bands=bands, cloud_cover_max=50, date_sort=False)
             points = getPointsInRegion(rect, max_ims,seed)
             im = collection.mosaic().multiply(255).toByte() 
             for point in points:
@@ -137,7 +133,6 @@ else:
 
 def getURL(index):
     image = ee.Image(im_list.get(index))
-    image = image.multiply(255).toByte()
     if args.crs:
         crs = args.crs
     else:

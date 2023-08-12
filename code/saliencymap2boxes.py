@@ -4,13 +4,13 @@ import cv2
 import matplotlib.pyplot as plt
 
 
-saliency_map = np.load('17R_saliencymap.npy')
+saliency_map = np.load('paper_saliencymap.npy')
 
 im_h = saliency_map.shape[0]
 im_w = saliency_map.shape[1]
 
 window = 50
-num_boxes = 100
+num_boxes = 25
 boxes = []
 
 for n in tqdm(range(num_boxes)):
@@ -35,7 +35,7 @@ for n in tqdm(range(num_boxes)):
     saliency_map[tl_y:tl_y+window,tl_x:tl_x+window] = 0
     
     
-saliency_map = np.load('17R_saliencymap.npy')
+saliency_map = np.load('paper_saliencymap.npy')
 # np.save('boxessm.npy',np.array(boxes))    
 for box in boxes:
     x,y,w,h = box
@@ -69,7 +69,7 @@ plt.show()
 # cv2.imshow('', saliency_map)
 # cv2.waitKey(0)
 
-left, bottom,right,top = (-84,24,-78,32)
+left, bottom,right,top = (-88,24,-77,31)
 
 outboxes = []
 lon_range = right - left
