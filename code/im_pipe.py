@@ -16,9 +16,8 @@ LANDMARKS_PRE = './landmarks/'
 LANDMARKS_SUF = '_outboxes.npy'
 CLASS_DICT_PATH = 'class_dict.npy'
 
-def im_pipe(image_path):
-    im = Image.open(image_path).convert('RGB')
-    assert im.width == 2592 and im.height == 1944
+def im_pipe(im):
+  #  assert im.width == 2592 and im.height == 1944
     proceed = check_zeros(im)
     if not proceed:
         return [], []
@@ -88,7 +87,6 @@ def landmark_detection(key, im):
         
          
 def check_region(im):
-    print('Checking regions')
     model_path = RC_MODEL_PATH
     model_dict = torch.load(model_path)
     model_state_dict = model_dict#model_dict['model_state_dict']
@@ -115,7 +113,6 @@ def check_region(im):
     pred = preds[0].cpu()
     pred = [x.item() for x in pred.nonzero()]
     conf = [sigscores[0][x].item() for x in pred]
-    print('Regions found: ', pred)
     return pred, conf
     
 def check_zeros(im):
