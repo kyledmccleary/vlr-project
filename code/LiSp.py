@@ -61,6 +61,7 @@ def main():
         ##  send to OD  ##
         if tot_detections >= BO_detection_thresh:
             # results = od_pipe(all_dets)
+            tot_detections = 0
 
     cap.release()
     cv2.destroyAllWindows()
