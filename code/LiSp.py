@@ -6,6 +6,8 @@ from PIL import Image
 
 def main():
     
+    BO_detection_thresh = 100
+    
     # Open camera
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
@@ -13,6 +15,9 @@ def main():
         exit()
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2592)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1944)    
+    
+    all_dets = []
+    tot_detections = 0
         
     # Loop camera capture
     while True:
@@ -32,6 +37,8 @@ def main():
         
         # run image pipeline on image
         keys, detections = im_pipe(frame_im)
+        tot_detections += len(detections)
+        all_dets.append([capture_time, detections])
         print('regions: ', keys, '\t num dets: ', len(detections))
         for landmark in detections:
             x, y, lonlat, conf = landmark
@@ -52,6 +59,8 @@ def main():
             break
          
         ##  send to OD  ##
+        if tot_detections >= BO_detection_thresh:
+            # results = od_pipe(all_dets)
 
     cap.release()
     cv2.destroyAllWindows()
