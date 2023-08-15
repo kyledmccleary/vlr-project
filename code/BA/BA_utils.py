@@ -469,7 +469,11 @@ def RK4_orbit_dynamics_avg(x, h):
      
 
 
-gmst_deg = 100.0
+# gmst_deg = 100.0
+theta_G0_deg = 280.16  # GMST at J2000.0 epoch in degrees
+omega_earth_deg_per_sec = 360 / 86164.100352  # Earth's average rotational velocity in degrees per second
+
+
 
 # Constants for the Earth's shape
 a = 6378.137  # Earth's equatorial radius in kilometers
@@ -481,13 +485,37 @@ def deg_to_rad(deg):
 
 def ecef_to_eci(x_ecef, y_ecef, z_ecef, gmst):
     # Step 1: Convert ECEF to ECI coordinates
-    theta = gmst + deg_to_rad(90.0)  # Convert GMST to radians and add 90 degrees
+    theta = gmst #+ deg_to_rad(90.0)  # Convert GMST to radians and add 90 degrees
 
     x_eci = x_ecef * np.cos(theta) - y_ecef * np.sin(theta)
     y_eci = x_ecef * np.sin(theta) + y_ecef * np.cos(theta)
     z_eci = z_ecef
 
     return x_eci, y_eci, z_eci
+
+def get_Rz(times):
+    theta_G_rad = np.deg2rad(theta_G0_deg + omega_earth_deg_per_sec * times)
+    ZERO = np.zeros_like(theta_G_rad)
+    ONE = np.ones_like(theta_G_rad)
+
+    # Rotation matrix
+    Rz = np.stack([
+        np.stack([np.cos(theta_G_rad), np.sin(theta_G_rad), ZERO],axis=-1),
+        np.stack([-np.sin(theta_G_rad), np.cos(theta_G_rad), ZERO],axis=-1),
+        np.stack([ZERO, ZERO, ONE], axis=-1)
+    ], axis=-2)
+    return Rz
+
+def eci_to_ecef(r_eci, times):
+
+    # Rotation matrix
+    Rz = get_Rz(times)
+
+    # Convert ECI to ECEF
+    r_ecef = Rz * r_eci[:, None, :]
+
+    return r_ecef
+    # return x_eci, y_eci, z_eci
 
 def geodetic_to_ecef(latitude, longitude, altitude):
     # Step 1: Convert latitude and longitude to geocentric latitude
@@ -506,7 +534,7 @@ def geodetic_to_ecef(latitude, longitude, altitude):
 
     return x_ecef, y_ecef, z_ecef
 
-def convert_latlong_to_cartesian(lat, long, altitude=None):
+def convert_latlong_to_cartesian(lat, long, times, altitude=None):
     if altitude is None:
         altitude = np.zeros(lat.shape[0])
 
@@ -515,6 +543,7 @@ def convert_latlong_to_cartesian(lat, long, altitude=None):
     # Step 1: Convert latitude, longitude, altitude to ECEF coordinates
     x_ecef, y_ecef, z_ecef = geodetic_to_ecef(latitude, longitude, altitude)
 
+    gmst_deg = theta_G0_deg + omega_earth_deg_per_sec * times
     # Step 2: Convert ECEF to ECI coordinates
     x_eci, y_eci, z_eci = ecef_to_eci(x_ecef, y_ecef, z_ecef, gmst_deg)
 
@@ -561,28 +590,38 @@ def convert_pos_to_quaternion(pos_eci):
     quaternion = rot.as_quat()
     return quaternion
 
-def convert_quaternion_to_xyz_orientation(quat):
+def convert_quaternion_to_xyz_orientation(quat, times):
     # Step 1: convert quat to rotation matrix
     rot = transform.Rotation.from_quat(quat)
     R = rot.as_matrix()
+
+    # Step 2: comvert to ECEF from ECI
+    Rz = get_Rz(times)
+    R = Rz @ R
+
+
+    # Step 3: compute the x, y, z axis
     xc, yc, zc = R[:, 0], R[:, 1], R[:, 2]
+    right_vector = xc
+    up_vector = -yc
+    forward_vector = zc
 
 
-    zc = direction_vector = - pos_eci / (np.linalg.norm(pos_eci, axis=-1)[..., None])
+    # zc = direction_vector = - pos_eci / (np.linalg.norm(pos_eci, axis=-1)[..., None])
 
-    # Step 2: Calculate the quaternion orientation
-    # Compute the angle between the satellite's local Z-axis and the ECI Z-axis
-    north_pole_eci = np.array([0, 0, 1])[None]
-    axis_of_rotation_z = np.cross(north_pole_eci, direction_vector)
-    rc = axis_of_rotation_z = axis_of_rotation_z / np.linalg.norm(axis_of_rotation_z, axis=-1)[..., None]
-    xc = -rc
+    # # Step 2: Calculate the quaternion orientation
+    # # Compute the angle between the satellite's local Z-axis and the ECI Z-axis
+    # north_pole_eci = np.array([0, 0, 1])[None]
+    # axis_of_rotation_z = np.cross(north_pole_eci, direction_vector)
+    # rc = axis_of_rotation_z = axis_of_rotation_z / np.linalg.norm(axis_of_rotation_z, axis=-1)[..., None]
+    # xc = -rc
 
-    # compute the vector pointing to the north from camera
-    yc = south_vector = np.cross(rc, zc)
-    R = np.stack([xc, yc, zc], axis=-1)
-    rot = transform.Rotation.from_matrix(R)
-    quaternion = rot.as_quat()
-    return quaternion
+    # # compute the vector pointing to the north from camera
+    # yc = south_vector = np.cross(rc, zc)
+    # R = np.stack([xc, yc, zc], axis=-1)
+    # rot = transform.Rotation.from_matrix(R)
+    # quaternion = rot.as_quat()
+    return forward_vector, up_vector, right_vector 
 
 
 def compute_omega_from_quat(quat, dt):

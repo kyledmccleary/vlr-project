@@ -248,7 +248,7 @@ def generate_new_traj(orbit_type='polar'):
     for k in range(len(tsamp)-1):
         xtraj_attitude[:, k+1] = attitude_step(xtraj_attitude[:, k], 1.0)
 
-    return np.concatenate([xtraj_orbit, xtraj_attitude], axis=1)
+    return np.concatenate([xtraj_orbit, xtraj_attitude], axis=1), tsamp
 
 if __name__ == "__main__":
 
