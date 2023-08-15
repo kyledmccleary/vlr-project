@@ -561,6 +561,29 @@ def convert_pos_to_quaternion(pos_eci):
     quaternion = rot.as_quat()
     return quaternion
 
+def convert_quaternion_to_xyz_orientation(quat):
+    # Step 1: convert quat to rotation matrix
+    rot = transform.Rotation.from_quat(quat)
+    R = rot.as_matrix()
+    xc, yc, zc = R[:, 0], R[:, 1], R[:, 2]
+
+
+    zc = direction_vector = - pos_eci / (np.linalg.norm(pos_eci, axis=-1)[..., None])
+
+    # Step 2: Calculate the quaternion orientation
+    # Compute the angle between the satellite's local Z-axis and the ECI Z-axis
+    north_pole_eci = np.array([0, 0, 1])[None]
+    axis_of_rotation_z = np.cross(north_pole_eci, direction_vector)
+    rc = axis_of_rotation_z = axis_of_rotation_z / np.linalg.norm(axis_of_rotation_z, axis=-1)[..., None]
+    xc = -rc
+
+    # compute the vector pointing to the north from camera
+    yc = south_vector = np.cross(rc, zc)
+    R = np.stack([xc, yc, zc], axis=-1)
+    rot = transform.Rotation.from_matrix(R)
+    quaternion = rot.as_quat()
+    return quaternion
+
 
 def compute_omega_from_quat(quat, dt):
     phis = quaternion_log(quat)
