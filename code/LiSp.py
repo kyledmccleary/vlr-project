@@ -13,8 +13,8 @@ def main():
     if not cap.isOpened():
         print("Cannot open camera")
         exit()
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2592)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1944)    
+    # cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2592)
+    # cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1944)    
     
     all_dets = []
     tot_detections = 0

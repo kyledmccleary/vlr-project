@@ -8,5 +8,6 @@ datasets/
 *.pt
 *.zip
 *.yaml
+lisp/
 
 
