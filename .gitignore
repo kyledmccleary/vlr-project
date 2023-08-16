@@ -9,5 +9,6 @@ datasets/
 *.zip
 *.yaml
 lisp/
-
+code/__pycache__/
+code/BA/__pycache__/
 

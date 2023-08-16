@@ -1,5 +1,10 @@
 import numpy as np
-import ipdb
+import BA.BA_utils 
+import matplotlib.pyplot as plt
+import json
+# from skyfield.api import Distance, load, wgs84
+# from skyfield.positionlib import Geocentric
+# import ipdb
 
 class OrbitalElements:
     def __init__(self, a, e, i, Omega, omega, nu):
@@ -261,19 +266,20 @@ if __name__ == "__main__":
     oe_polar = OrbitalElements(600.0 + 6378.0 + (100 * 0.5 - 50), 0.0 + 0.01 * 0.5, (np.pi / 2) + (0.2 * 0.5 - 0.1), 2 * np.pi * 0.5, 2 * np.pi * 0.5, 2 * np.pi * 0.5)
 
     # #ISS~ish Orbit
-    # eo_iss = OrbitalElements(420.0+6378.0+(100*np.random.rand()-50) ,0.00034+0.01*np.random.rand(), (51.5*np.pi/180)+(0.2*np.random.rand()-0.1), 2*np.pi*np.random.rand(), 2*np.pi*np.random.rand(), 2*np.pi*np.random.rand())
+    eo_iss = OrbitalElements(420.0+6378.0+(100*np.random.rand()-50) ,0.00034+0.01*np.random.rand(), (51.5*np.pi/180)+(0.2*np.random.rand()-0.1), 2*np.pi*np.random.rand(), 2*np.pi*np.random.rand(), 2*np.pi*np.random.rand())
+    # eo_iss = OrbitalElements(420.0+6378.0, 0.00034, 51.5*np.pi/180, 2*np.pi, 2*np.pi, 2*np.pi)
 
-    x0_orbit = oe2eci(oe_polar)
+    x0_orbit = oe2eci(eo_iss)
 
     # Simulate for 3 hours (~2 orbits)
     tf = 3 * 60 * 60
-    tsamp = np.arange(0, tf+1, 1)
+    tsamp = np.arange(0, tf+1, 10)
 
     xtraj_orbit = np.zeros((6, len(tsamp)))
     xtraj_orbit[:, 0] = x0_orbit
 
     for k in range(len(tsamp)-1):
-        xtraj_orbit[:, k+1] = orbit_step(xtraj_orbit[:, k], 1.0)
+        xtraj_orbit[:, k+1] = orbit_step(xtraj_orbit[:, k], 10.0)
     np.set_printoptions(threshold=np. inf, suppress=True, linewidth=np. inf) 
     print(xtraj_orbit[:,:10].T)
 
@@ -288,6 +294,50 @@ if __name__ == "__main__":
     xtraj_attitude[:, 0] = x0_attitude
 
     for k in range(len(tsamp)-1):
-        xtraj_attitude[:, k+1] = attitude_step(xtraj_attitude[:, k], 1.0)
+        xtraj_attitude[:, k+1] = attitude_step(xtraj_attitude[:, k], 10.0)
 
     print(xtraj_attitude[:,:10].T)
+    
+    
+    # Convert to ECEF
+    # ts = load.timescale()
+    # t = ts.utc(2020,1,1)
+    # d = Distance(km=[xtraj_orbit[0,:].T,xtraj_orbit[1,:].T,xtraj_orbit[2,:].T])
+    # p = Geocentric(d.au, t=t)    
+    # g = wgs84.subpoint(p)
+    # r_ecef = g.itrs_xyz.km.T
+    
+    r_eci = xtraj_orbit[:3].T
+    r_eci = r_eci[:,:,np.newaxis]
+    Rzs = BA.BA_utils.get_Rz(tsamp)
+    r_ecef = np.matmul(Rzs, r_eci)
+    forward, up, right = BA.BA_utils.convert_quaternion_to_xyz_orientation(xtraj_attitude[:4,:].T, tsamp)
+    
+    #plot ECI pts
+    xs = r_eci[:,0]
+    ys = r_eci[:,1]
+    zs = r_eci[:,2]
+    ax = plt.figure().add_subplot(projection='3d')
+    ax.scatter(xs,ys,zs)
+
+    
+    #plot ECEF pts
+    xs = r_ecef[:,0]
+    ys = r_ecef[:,1]
+    zs = r_ecef[:,2]
+    ax.scatter(xs,ys,zs)
+
+     #plot ECEF pts 2
+    # ts = load.timescale()
+    # t = ts.utc(2020,1,1)
+    # d = Distance(km=[xtraj_orbit[0,:].T,xtraj_orbit[1,:].T,xtraj_orbit[2,:].T])
+    # p = Geocentric(d.au, t=t)    
+    # g = wgs84.subpoint(p)
+    # r_ecef = g.itrs_xyz.km.T
+    # xs = r_ecef[:,0]
+    # ys = r_ecef[:,1]
+    # zs = r_ecef[:,2]
+    # ax.scatter(xs,ys,zs)
+    plt.show()
+
+    

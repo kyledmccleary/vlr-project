@@ -2,7 +2,7 @@ import numpy as np
 import math
 import torch
 # from lietorch.groups import SO3, SE3
-import ipdb
+# import ipdb
 from BA.BA_utils import *
 """
 Computes the Bias-Precession-Nutation matrix transforming the GCRS to the 
