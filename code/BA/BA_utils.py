@@ -603,7 +603,7 @@ def convert_quaternion_to_xyz_orientation(quat, times):
     # Step 3: compute the x, y, z axis
     xc, yc, zc = R[:, 0], R[:, 1], R[:, 2]
     right_vector = xc
-    up_vector = -yc
+    up_vector = yc
     forward_vector = zc
 
 

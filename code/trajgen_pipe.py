@@ -6,6 +6,8 @@ import json
 # from skyfield.positionlib import Geocentric
 # import ipdb
 
+REQ = 6378.0  #radius of Earth at equator
+
 class OrbitalElements:
     def __init__(self, a, e, i, Omega, omega, nu):
         self.a = a
@@ -211,133 +213,152 @@ def attitude_step(xk, h):
 
     return xn
 
-def generate_new_traj(orbit_type='polar'):
-
-    # Use the functions as needed
-
-    # Random initial conditions
-
+def generate_eci_traj(mins, maxes, tf=3*60*60, ts=1, no_velocities=True):
     
-    if orbit_type == 'polar':
-        # Polar Orbit
-        oe = oe_polar = OrbitalElements(600.0 + 6378.0 + (100 * np.random.rand() - 50), 0.0 + 0.01 * np.random.rand(), (np.pi / 2) + (0.2 * np.random.rand() - 0.1), 2 * np.pi * np.random.rand(), 2 * np.pi * np.random.rand(), 2 * np.pi * np.random.rand())
-        # oe_polar = OrbitalElements(600.0 + 6378.0 + (100 * 0.5 - 50), 0.0 + 0.01 * 0.5, (np.pi / 2) + (0.2 * 0.5 - 0.1), 2 * np.pi * 0.5, 2 * np.pi * 0.5, 2 * np.pi * 0.5)
-    else:
-        # #ISS~ish Orbit
-        oe = oe_iss = OrbitalElements(420.0+6378.0+(100*np.random.rand()-50) ,0.00034+0.01*np.random.rand(), (51.5*np.pi/180)+(0.2*np.random.rand()-0.1), 2*np.pi*np.random.rand(), 2*np.pi*np.random.rand(), 2*np.pi*np.random.rand())
-
+    mins = np.array(mins)
+    maxes = np.array(maxes)
+    
+    # Generate orbital elements within given ranges
+    rands = np.random.rand(len(mins))
+    oes = rands * (maxes - mins) + mins
+    oe = OrbitalElements(*oes)
+    
+    # Get initial ECI position and velocity of orbit
     x0_orbit = oe2eci(oe)
-
-    # Simulate for 3 hours (~2 orbits)
-    tf = 3 * 60 * 60
-    tsamp = np.arange(0, tf+1, 1)
-
+    
+    # Simulate for given duration with given sample rate
+    tsamp = np.arange(0, tf+1, ts)
+    
+    # Simulate position 
     xtraj_orbit = np.zeros((6, len(tsamp)))
     xtraj_orbit[:, 0] = x0_orbit
-
-    for k in range(len(tsamp)-1):
-        xtraj_orbit[:, k+1] = orbit_step(xtraj_orbit[:, k], 1.0)
-    np.set_printoptions(threshold=np. inf, suppress=True, linewidth=np. inf) 
-    print(xtraj_orbit[:,:10].T)
-
-    # Random initial conditions
+    
+    for k in range(len(tsamp) - 1):
+        xtraj_orbit[:, k+1] = orbit_step(xtraj_orbit[:, k], ts)
+        
+    # Simulate attitude
+    # Initial attitude conditions
     q0 = np.ones(4)*0.5#np.random.randn(4)
     q0 /= np.linalg.norm(q0)
     omega0 = 2 * (np.pi/180) * np.ones(3)*0.5#np.random.randn(3)
     x0_attitude = np.hstack((q0, omega0))
 
-    # Simulate
     xtraj_attitude = np.zeros((7, len(tsamp)))
     xtraj_attitude[:, 0] = x0_attitude
 
     for k in range(len(tsamp)-1):
         xtraj_attitude[:, k+1] = attitude_step(xtraj_attitude[:, k], 1.0)
-
-    return np.concatenate([xtraj_orbit, xtraj_attitude], axis=1), tsamp
-
-if __name__ == "__main__":
-
+    
+    dir_vec, up_vec, right_vec = BA.BA_utils.convert_quaternion_to_xyz_orientation(xtraj_attitude[:4,:].T, tsamp)
+    traj_positions = xtraj_orbit[:3,:].T
+    
+    
     # Use the functions as needed
 
     # Random initial conditions
 
-    # Polar Orbit
-    # oe_polar = OrbitalElements(600.0 + 6378.0 + (100 * np.random.rand() - 50), 0.0 + 0.01 * np.random.rand(), (np.pi / 2) + (0.2 * np.random.rand() - 0.1), 2 * np.pi * np.random.rand(), 2 * np.pi * np.random.rand(), 2 * np.pi * np.random.rand())
-    oe_polar = OrbitalElements(600.0 + 6378.0 + (100 * 0.5 - 50), 0.0 + 0.01 * 0.5, (np.pi / 2) + (0.2 * 0.5 - 0.1), 2 * np.pi * 0.5, 2 * np.pi * 0.5, 2 * np.pi * 0.5)
-
-    # #ISS~ish Orbit
-    eo_iss = OrbitalElements(420.0+6378.0+(100*np.random.rand()-50) ,0.00034+0.01*np.random.rand(), (51.5*np.pi/180)+(0.2*np.random.rand()-0.1), 2*np.pi*np.random.rand(), 2*np.pi*np.random.rand(), 2*np.pi*np.random.rand())
-    # eo_iss = OrbitalElements(420.0+6378.0, 0.00034, 51.5*np.pi/180, 2*np.pi, 2*np.pi, 2*np.pi)
-
-    x0_orbit = oe2eci(eo_iss)
-
-    # Simulate for 3 hours (~2 orbits)
-    tf = 3 * 60 * 60
-    tsamp = np.arange(0, tf+1, 10)
-
-    xtraj_orbit = np.zeros((6, len(tsamp)))
-    xtraj_orbit[:, 0] = x0_orbit
-
-    for k in range(len(tsamp)-1):
-        xtraj_orbit[:, k+1] = orbit_step(xtraj_orbit[:, k], 10.0)
-    np.set_printoptions(threshold=np. inf, suppress=True, linewidth=np. inf) 
-    print(xtraj_orbit[:,:10].T)
-
-    # Random initial conditions
-    q0 = np.ones(4)*0.5#np.random.randn(4)
-    q0 /= np.linalg.norm(q0)
-    omega0 = 2 * (np.pi/180) * np.ones(3)*0.5#np.random.randn(3)
-    x0_attitude = np.hstack((q0, omega0))
-
-    # Simulate
-    xtraj_attitude = np.zeros((7, len(tsamp)))
-    xtraj_attitude[:, 0] = x0_attitude
-
-    for k in range(len(tsamp)-1):
-        xtraj_attitude[:, k+1] = attitude_step(xtraj_attitude[:, k], 10.0)
-
-    print(xtraj_attitude[:,:10].T)
     
-    
-    # Convert to ECEF
-    # ts = load.timescale()
-    # t = ts.utc(2020,1,1)
-    # d = Distance(km=[xtraj_orbit[0,:].T,xtraj_orbit[1,:].T,xtraj_orbit[2,:].T])
-    # p = Geocentric(d.au, t=t)    
-    # g = wgs84.subpoint(p)
-    # r_ecef = g.itrs_xyz.km.T
-    
-    r_eci = xtraj_orbit[:3].T
-    r_eci = r_eci[:,:,np.newaxis]
-    Rzs = BA.BA_utils.get_Rz(tsamp)
-    r_ecef = np.matmul(Rzs, r_eci)
-    forward, up, right = BA.BA_utils.convert_quaternion_to_xyz_orientation(xtraj_attitude[:4,:].T, tsamp)
-    
-    #plot ECI pts
-    xs = r_eci[:,0]
-    ys = r_eci[:,1]
-    zs = r_eci[:,2]
+    # if orbit_type == 'polar':
+    #     # Polar Orbit
+    #     oe = oe_polar = OrbitalElements(600.0 + 6378.0 + (100 * np.random.rand() - 50), 0.0 + 0.01 * np.random.rand(), (np.pi / 2) + (0.2 * np.random.rand() - 0.1), 2 * np.pi * np.random.rand(), 2 * np.pi * np.random.rand(), 2 * np.pi * np.random.rand())
+    #     # oe_polar = OrbitalElements(600.0 + 6378.0 + (100 * 0.5 - 50), 0.0 + 0.01 * 0.5, (np.pi / 2) + (0.2 * 0.5 - 0.1), 2 * np.pi * 0.5, 2 * np.pi * 0.5, 2 * np.pi * 0.5)
+    # else:
+    #     # #ISS~ish Orbit
+    #     oe = oe_iss = OrbitalElements(420.0+6378.0+(100*np.random.rand()-50) ,0.00034+0.01*np.random.rand(), (51.5*np.pi/180)+(0.2*np.random.rand()-0.1), 2*np.pi*np.random.rand(), 2*np.pi*np.random.rand(), 2*np.pi*np.random.rand())
+
+    # return np.concatenate([xtraj_orbit, xtraj_attitude], axis=1), tsamp
+    return np.concatenate([traj_positions, dir_vec, up_vec, right_vec],axis=1), tsamp
+
+if __name__ == "__main__":
     ax = plt.figure().add_subplot(projection='3d')
-    ax.scatter(xs,ys,zs)
-
+    for i in range(5):
+        mins = [400+REQ, 0, 0, 0, 0, 0]
+        maxes = [450+REQ, 0.1, np.pi/2, 2*np.pi, 2*np.pi, 2*np.pi]
+        orbit_eci, tsamp = generate_eci_traj(mins, maxes)
+        Rzs = BA.BA_utils.get_Rz(tsamp)
+        r_eci = orbit_eci[:,:3,np.newaxis]
+        r_ecef = np.matmul(Rzs, r_eci)
+        orbit_ecef = np.concatenate([r_ecef[:,:,0], orbit_eci[:,3:]],axis=1)
+        # Use the functions as needed
     
-    #plot ECEF pts
-    xs = r_ecef[:,0]
-    ys = r_ecef[:,1]
-    zs = r_ecef[:,2]
-    ax.scatter(xs,ys,zs)
-
-     #plot ECEF pts 2
-    # ts = load.timescale()
-    # t = ts.utc(2020,1,1)
-    # d = Distance(km=[xtraj_orbit[0,:].T,xtraj_orbit[1,:].T,xtraj_orbit[2,:].T])
-    # p = Geocentric(d.au, t=t)    
-    # g = wgs84.subpoint(p)
-    # r_ecef = g.itrs_xyz.km.T
-    # xs = r_ecef[:,0]
-    # ys = r_ecef[:,1]
-    # zs = r_ecef[:,2]
-    # ax.scatter(xs,ys,zs)
+        # Random initial conditions
+    
+        # Polar Orbit
+        # oe_polar = OrbitalElements(600.0 + 6378.0 + (100 * np.random.rand() - 50), 0.0 + 0.01 * np.random.rand(), (np.pi / 2) + (0.2 * np.random.rand() - 0.1), 2 * np.pi * np.random.rand(), 2 * np.pi * np.random.rand(), 2 * np.pi * np.random.rand())
+        # oe_polar = OrbitalElements(600.0 + 6378.0 + (100 * 0.5 - 50), 0.0 + 0.01 * 0.5, (np.pi / 2) + (0.2 * 0.5 - 0.1), 2 * np.pi * 0.5, 2 * np.pi * 0.5, 2 * np.pi * 0.5)
+    
+        # #ISS~ish Orbit
+        # eo_iss = OrbitalElements(420.0+6378.0+(100*np.random.rand()-50) ,0.00034+0.01*np.random.rand(), (51.5*np.pi/180)+(0.2*np.random.rand()-0.1), 2*np.pi*np.random.rand(), 2*np.pi*np.random.rand(), 2*np.pi*np.random.rand())
+        # eo_iss = OrbitalElements(420.0+6378.0, 0.00034, 51.5*np.pi/180, 2*np.pi, 2*np.pi, 2*np.pi)
+    
+        # x0_orbit = oe2eci(oe_polar)
+    
+        # # Simulate for 3 hours (~2 orbits)
+        # tf = 3 * 60 * 60
+        # tsamp = np.arange(0, tf+1, 10)
+    
+        # xtraj_orbit = np.zeros((6, len(tsamp)))
+        # xtraj_orbit[:, 0] = x0_orbit
+    
+        # for k in range(len(tsamp)-1):
+        #     xtraj_orbit[:, k+1] = orbit_step(xtraj_orbit[:, k], 10.0)
+        # np.set_printoptions(threshold=np. inf, suppress=True, linewidth=np. inf) 
+        # print(xtraj_orbit[:,:10].T)
+    
+        # # Random initial conditions
+        # q0 = np.ones(4)*0.5#np.random.randn(4)
+        # q0 /= np.linalg.norm(q0)
+        # omega0 = 2 * (np.pi/180) * np.ones(3)*0.5#np.random.randn(3)
+        # x0_attitude = np.hstack((q0, omega0))
+    
+        # # Simulate
+        # xtraj_attitude = np.zeros((7, len(tsamp)))
+        # xtraj_attitude[:, 0] = x0_attitude
+    
+        # for k in range(len(tsamp)-1):
+        #     xtraj_attitude[:, k+1] = attitude_step(xtraj_attitude[:, k], 10.0)
+    
+        # print(xtraj_attitude[:,:10].T)
+        
+        
+        # # Convert to ECEF
+        # # ts = load.timescale()
+        # # t = ts.utc(2020,1,1)
+        # # d = Distance(km=[xtraj_orbit[0,:].T,xtraj_orbit[1,:].T,xtraj_orbit[2,:].T])
+        # # p = Geocentric(d.au, t=t)    
+        # # g = wgs84.subpoint(p)
+        # # r_ecef = g.itrs_xyz.km.T
+        
+        # r_eci = xtraj_orbit[:3].T
+        # r_eci = r_eci[:,:,np.newaxis]
+        # Rzs = BA.BA_utils.get_Rz(tsamp)
+        # r_ecef = np.matmul(Rzs, r_eci)
+        # forward, up, right = BA.BA_utils.convert_quaternion_to_xyz_orientation(xtraj_attitude[:4,:].T, tsamp)
+        
+        # #plot ECI pts
+        # xs = r_eci[:,0]
+        # ys = r_eci[:,1]
+        # zs = r_eci[:,2]
+        # ax.scatter(xs,ys,zs)
+    
+        
+        #plot ECEF pts
+        xs = orbit_ecef[:,0]
+        ys = orbit_ecef[:,1]
+        zs = orbit_ecef[:,2]
+        ax.scatter(xs,ys,zs)
+    
+         #plot ECEF pts 2
+        # ts = load.timescale()
+        # t = ts.utc(2020,1,1)
+        # d = Distance(km=[xtraj_orbit[0,:].T,xtraj_orbit[1,:].T,xtraj_orbit[2,:].T])
+        # p = Geocentric(d.au, t=t)    
+        # g = wgs84.subpoint(p)
+        # r_ecef = g.itrs_xyz.km.T
+        # xs = r_ecef[:,0]
+        # ys = r_ecef[:,1]
+        # zs = r_ecef[:,2]
+        # ax.scatter(xs,ys,zs)
     plt.show()
 
     
