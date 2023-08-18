@@ -59,7 +59,22 @@ def landmark_project(poses, landmarks_xyz, intrinsics, ii, jacobian=True):
         return landmark_est, Jg
     return landmark_est
 
-def predict(poses, velocities, imu_meas, dt=1, jacobian=True):
+def propagate_dynamics(position, velocities, times, dt):
+    time_diffs = times[1:] - times[:-1]
+    time_diffs = torch.cat([time_diffs, torch.ones_like(time_diffs[-1:])], dim=0)
+    max_time_diff = time_diffs.max()
+    x = torch.cat([position, velocities], dim=-1)
+    x_pred = []
+    for i in range(max_time_diff):
+        x = RK4(x, i, dt)
+        x_pred.append(x[:, :, :3])
+    x_pred = torch.stack(x_pred, dim=-2)
+    x_pred = x_pred[:, torch.arange(len(time_diffs)), time_diffs-1]
+    pos_pred = x_pred[:, :, :3]
+    vel_pred = x_pred[:, :, 3:]
+    return pos_pred, vel_pred
+
+def predict(poses, velocities, imu_meas, times, dt=1, jacobian=True):
     w, a = imu_meas[..., :3], imu_meas[..., 3:]
     # phi = quaternion_log(poses[:,:,3:])
     # position = poses[:,:,:3]
@@ -71,15 +86,18 @@ def predict(poses, velocities, imu_meas, dt=1, jacobian=True):
     # pose_pred = torch.cat([pos_pred, quaternion_exp(phi_pred)], 2) # TODO: why .data? for quaternion_exp().data
     # vel_pred = vel
     # res_pred = torch.cat([pos_pred[:,:-1] - position[:,1:], 1 - torch.abs(q_pred*rotation[:,1:])], 2)
+    # velocities = velocities[:, times[:]:]
+    # w = w[:, times[:]]
     bsz = poses.shape[0]
     N = poses.shape[1]
     def res_preds(poses):
         phi = quaternion_log(poses[:,:,3:])
         position = poses[:,:,:3]
         rotation = poses[:,:,3:]
+        # pos_pred, vel_pred = propagate_dynamics(position, velocities, times, dt)
         vel = velocities + dt * a#apply_pose_transformation_quat(a, rotation) # SO3(rotation).act(a.unsqueeze(-1)).squeeze(-1)
-        pos_pred = position + dt * velocities
-        phi_pred = phi + dt * w
+        pos_pred = position + dt * velocities.sum(dim=-2)
+        phi_pred = phi + dt * w.sum(dim=-2)
         q_pred = quaternion_exp(phi_pred)#.data  # TODO: why .data?
         pose_pred = torch.cat([pos_pred, quaternion_exp(phi_pred)], 2) # TODO: why .data? for quaternion_exp().data
         vel_pred = vel
@@ -512,7 +530,7 @@ def eci_to_ecef(r_eci, times):
     Rz = get_Rz(times)
 
     # Convert ECI to ECEF
-    r_ecef = Rz * r_eci[:, None, :]
+    r_ecef = (Rz * r_eci[:, None, :]).sum(axis=-1)
 
     return r_ecef
     # return x_eci, y_eci, z_eci
@@ -606,21 +624,6 @@ def convert_quaternion_to_xyz_orientation(quat, times):
     up_vector = -yc
     forward_vector = zc
 
-
-    # zc = direction_vector = - pos_eci / (np.linalg.norm(pos_eci, axis=-1)[..., None])
-
-    # # Step 2: Calculate the quaternion orientation
-    # # Compute the angle between the satellite's local Z-axis and the ECI Z-axis
-    # north_pole_eci = np.array([0, 0, 1])[None]
-    # axis_of_rotation_z = np.cross(north_pole_eci, direction_vector)
-    # rc = axis_of_rotation_z = axis_of_rotation_z / np.linalg.norm(axis_of_rotation_z, axis=-1)[..., None]
-    # xc = -rc
-
-    # # compute the vector pointing to the north from camera
-    # yc = south_vector = np.cross(rc, zc)
-    # R = np.stack([xc, yc, zc], axis=-1)
-    # rot = transform.Rotation.from_matrix(R)
-    # quaternion = rot.as_quat()
     return forward_vector, up_vector, right_vector 
 
 

@@ -11,7 +11,7 @@ from BA.BA_utils import *
 # 4. Integrate with the DL detection stack
 # 5. Implement differentiability for the BA function
 
-def BA(poses, velocities, imu_meas, landmarks, landmarks_xyz, ii, intrinsics, Sigma, V, poses_gt_eci):
+def BA(poses, velocities, imu_meas, landmarks, landmarks_xyz, ii, time_idx, intrinsics, Sigma, V, poses_gt_eci):
 	poses = poses.float()
 	# ipdb.set_trace()
 	v = velocities.float()
@@ -19,10 +19,11 @@ def BA(poses, velocities, imu_meas, landmarks, landmarks_xyz, ii, intrinsics, Si
 	landmarks = landmarks.float()
 	landmarks_xyz = landmarks_xyz.float()
 	intrinsics = intrinsics.float()
+	time_idx = time_idx.float()
 
 	bsz = poses.shape[0]
 	landmark_est, Jg = landmark_project(poses, landmarks_xyz, intrinsics, ii, jacobian=True)
-	r_pred, pose_pred, vel_pred, Ji, Ji_1, Jf = predict(poses, velocities, imu_meas, jacobian=True) 
+	r_pred, pose_pred, vel_pred, Ji, Ji_1, Jf = predict(poses, velocities, imu_meas, time_idx, jacobian=True) 
 	r_obs = landmarks - landmark_est	
 	# ipdb.set_trace()
 	# r_full = torch.cat([r_obs, r_pred], dim = 1)
