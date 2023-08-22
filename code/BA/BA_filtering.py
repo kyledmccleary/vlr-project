@@ -19,7 +19,7 @@ def BA(poses, velocities, imu_meas, landmarks, landmarks_xyz, ii, time_idx, intr
 	landmarks = landmarks.float()
 	landmarks_xyz = landmarks_xyz.float()
 	intrinsics = intrinsics.float()
-	time_idx = time_idx.float()
+	# time_idx = time_idx.float()
 
 	bsz = poses.shape[0]
 	landmark_est, Jg = landmark_project(poses, landmarks_xyz, intrinsics, ii, jacobian=True)
@@ -61,7 +61,7 @@ def BA(poses, velocities, imu_meas, landmarks, landmarks_xyz, ii, time_idx, intr
 	dim2 = min(4, dim)
 	Jf = Jf.view(bsz, (n-1)*dim2, n*dim)
 	JfTwJf = torch.bmm((Jf*Sigma).transpose(1,2), Jf)
-	JTwJ = JgTwJg+ JfTwJf 
+	JTwJ =  torch.eye(n*dim)[None]*1e-5+JgTwJg + JfTwJf*0.1 #+ torch.eye(n*dim)[None]*1e-5+#.1 # 
 	
 	# J_full = torch.cat([Jg, Jf], axis=1)
 	# wts = torch.cat([V, Sigma], 1).unsqueeze(-1)
@@ -73,25 +73,58 @@ def BA(poses, velocities, imu_meas, landmarks, landmarks_xyz, ii, time_idx, intr
 	# ipdb.set_trace()	
 	r_pred = r_pred[:, :,  :dim]
 	JgT_robs = safe_scatter_add_vec((Jg.reshape(bsz, -1, 2, dim)*r_obs.unsqueeze(-1)).sum(dim=-2), ii_t, n).view(bsz, n,dim)
-	ipdb.set_trace()
-	JfT_rpred = (r_pred.reshape(bsz, -1, 1) * Jf).sum(dim=1).reshape(bsz, n, dim)
+	# ipdb.set_trace()
+	JfT_rpred = (r_pred.reshape(bsz, -1, 1) * Jf).sum(dim=1).reshape(bsz, n, dim)*(-1)*0.1
 	JTr = (JgT_robs + JfT_rpred).reshape(bsz, -1)#+ JfT_rpred
 	dpose = torch.linalg.solve(JTwJ, JTr).reshape(bsz, n, dim)
+	ipdb.set_trace()
 
-	phi = quaternion_log(poses[:,:,3:])
-	position = poses[:,:,:3] #+ dpose[:,:,:3]
-	rotation = quaternion_exp(phi + dpose[:,:,3:])
-	# rotation = poses[:,:,3:] + dpose[:,:,3:]
-	rotation = rotation / torch.norm(rotation, dim=2, keepdim=True)
-	poses_new = torch.cat([position, rotation], 2)
-	# print("final: ", (poses_new[0,:3, :3]-poses_gt_eci[:3, :3]).abs().mean(dim=0))
-	# print("init: ", (poses[0,:3, :3] - poses_gt_eci[:3, :3]).abs().mean(dim=0))
-	# print("r_pred :", r_pred[0,:3].abs().mean(dim=0))
-	# print("r_obs :", r_obs[0,:3].abs().mean(dim=0))
 
-	print("final: ", (poses_new[0,:3, 3:]-poses_gt_eci[:3, 3:]).abs().mean(dim=0))
-	print("init: ", (poses[0,:3, 3:] - poses_gt_eci[:3, 3:]).abs().mean(dim=0))
+	## backtracking line search
+	alpha = 1
+	init_residual = (r_obs.abs()).sum() + (r_pred.abs()).sum()
+	print("alpha: ", alpha, r_pred.abs().mean(), r_obs.abs().mean())
+	while True:
+		position = poses[:,:,:3] + alpha*dpose[:,:,:3]
+		rotation = quaternion_multiply(poses[:,:,3:], quaternion_exp(alpha*dpose[:,:,3:]))
+		rotation = rotation / torch.norm(rotation, dim=2, keepdim=True)
+		poses_new = torch.cat([position, rotation], 2)
+		landmark_est = landmark_project(poses_new, landmarks_xyz, intrinsics, ii, jacobian=False)
+		r_pred1, _, _ = predict(poses_new, velocities, imu_meas, time_idx, jacobian=False) 
+		r_obs1 = landmarks - landmark_est
+		r_pred1 = r_pred1[:, :,  :dim].reshape(bsz, -1)*0.1
+		r_obs1 = r_obs1.reshape(bsz, -1)
+		residual = torch.cat([r_obs1, r_pred1], dim = 1)
+		if (residual.abs()).sum() < init_residual:
+			break
+		else:
+			alpha = alpha/2
+		print("alpha: ", alpha, r_pred1.abs().mean(), r_obs1.abs().mean())
+		if alpha < 1e-4:
+			print("alpha too small")
+			break
+		
+
+	# position = poses[:,:,:3] + dpose[:,:,:3]
+	# rotation = quaternion_multiply(poses[:,:,3:], quaternion_exp(dpose[:,:,3:]))
+	# # ipdb.set_trace()
+	# # rotation = rotation[:, 1:]
+	# # rotation = poses[:,1:,3:] + dpose[:,1:,3:]
+	# rotation = rotation / torch.norm(rotation, dim=2, keepdim=True)
+	# poses_new = torch.cat([position, rotation], 2)
+	# # poses_new = torch.cat([poses[:,:1], poses_new], 1)
+	# # print("final: ", (poses_new[0,:3, :3]-poses_gt_eci[:3, :3]).abs().mean(dim=0))
+	# # print("init: ", (poses[0,:3, :3] - poses_gt_eci[:3, :3]).abs().mean(dim=0))
+	# # print("r_pred :", r_pred[0,:3].abs().mean(dim=0))
+	# # print("r_obs :", r_obs[0,:3].abs().mean(dim=0))
+
+	print("final quat: ", (poses_new[0,:3, 3:]-poses_gt_eci[:3, 3:]).abs().mean(dim=0))
+	# print("final: ", (poses_new2[0,:3, 3:]-poses_gt_eci[:3, 3:]).abs().mean(dim=0))
+	# print("final: ", (poses_new3[0,:3, 3:]-poses_gt_eci[:3, 3:]).abs().mean(dim=0))
+	print("init quat: ", (poses[0,:3, 3:] - poses_gt_eci[:3, 3:]).abs().mean(dim=0))
+	print("final pos: ", (poses_new[0,:3, :3]-poses_gt_eci[:3, :3]).abs().mean(dim=0))
+	print("init pos: ", (poses[0,:3, :3] - poses_gt_eci[:3, :3]).abs().mean(dim=0))
 	print("r_pred :", r_pred[0,:3].abs().mean(dim=0))
 	print("r_obs :", r_obs[0,:3].abs().mean(dim=0))
-	ipdb.set_trace()
+	# ipdb.set_trace()
 	return poses_new, velocities

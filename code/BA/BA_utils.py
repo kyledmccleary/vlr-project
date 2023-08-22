@@ -54,12 +54,12 @@ def landmark_project(poses, landmarks_xyz, intrinsics, ii, jacobian=True):
         Gq = attitude_jacobian(poses_ii[:,3:])
         # Jg = torch.autograd.functional.jacobian(landmark_est.reshape(-1, 2), poses_ii.reshape(-1,7))
         Jg = torch.autograd.functional.jacobian(project_ii_sum, poses_ii, vectorize=True).transpose(0,1)
-        ipdb.set_trace()
+        # ipdb.set_trace()
         Jg = torch.cat([Jg[:,:,:3], torch.bmm(Jg[:,:,3:], Gq)], dim=2).reshape(-1, 2, 6)
         return landmark_est, Jg
     return landmark_est
 
-def propagate_dynamics(position, velocities, times, dt):
+def propagate_orbit_dynamics(position, velocities, times, dt):
     time_diffs = times[1:] - times[:-1]
     time_diffs = torch.cat([time_diffs, torch.ones_like(time_diffs[-1:])], dim=0)
     max_time_diff = time_diffs.max()
@@ -73,6 +73,25 @@ def propagate_dynamics(position, velocities, times, dt):
     pos_pred = x_pred[:, :, :3]
     vel_pred = x_pred[:, :, 3:]
     return pos_pred, vel_pred
+
+def propagate_rotation_dynamics(quaternion, omegas, times, dt):
+    # ipdb.set_trace()
+    time_diffs = torch.tensor(times[1:] - times[:-1])
+    time_diffs = torch.cat([time_diffs, torch.ones_like(time_diffs[-1:])], dim=0)
+    max_time_diff = time_diffs.max()
+    q_pred = []
+    # quaternion = quaternion.reshape(-1, 4)
+    # omegas = omegas.reshape(-1, len(max_time_diff), 3)
+    # ipdb.set_trace()
+    for i in range(max_time_diff):
+        quaternion = quaternion_multiply(quaternion, quaternion_exp(dt * omegas[:, :, i]))
+        q_pred.append(quaternion)
+    q_pred = torch.stack(q_pred, dim=-2)
+    # q_pred = q_pred.reshape(bsz, -1, len(max_time_diff), 4)
+    q_pred = q_pred[:, torch.arange(len(time_diffs)), time_diffs-1]#torch.zeros_like(time_diffs-1)]
+    # pos_pred = x_pred[:, :, :3]
+    # vel_pred = x_pred[:, :, 3:]
+    return q_pred
 
 def predict(poses, velocities, imu_meas, times, dt=1, jacobian=True):
     w, a = imu_meas[..., :3], imu_meas[..., 3:]
@@ -90,18 +109,23 @@ def predict(poses, velocities, imu_meas, times, dt=1, jacobian=True):
     # w = w[:, times[:]]
     bsz = poses.shape[0]
     N = poses.shape[1]
+    num_res = (N-1)*4
     def res_preds(poses):
-        phi = quaternion_log(poses[:,:,3:])
+        # phi = quaternion_log(poses[:,:,3:])
+        # ipdb.set_trace()
         position = poses[:,:,:3]
         rotation = poses[:,:,3:]
         # pos_pred, vel_pred = propagate_dynamics(position, velocities, times, dt)
         vel = velocities + dt * a#apply_pose_transformation_quat(a, rotation) # SO3(rotation).act(a.unsqueeze(-1)).squeeze(-1)
         pos_pred = position + dt * velocities.sum(dim=-2)
-        phi_pred = phi + dt * w.sum(dim=-2)
-        q_pred = quaternion_exp(phi_pred)#.data  # TODO: why .data?
-        pose_pred = torch.cat([pos_pred, quaternion_exp(phi_pred)], 2) # TODO: why .data? for quaternion_exp().data
+        q_pred = propagate_rotation_dynamics(rotation, w, times, dt)
+        # ipdb.set_trace()
+        # q_pred = quaternion_multiply(poses[:,:,3:], quaternion_exp(dt * w))#.data  # TODO: why .data?
+        # phi_pred = phi + dt * w.sum(dim=-2)
+        # q_pred = quaternion_exp(phi_pred)#.data  # TODO: why .data?
+        pose_pred = torch.cat([pos_pred, q_pred], 2) # TODO: why .data? for quaternion_exp().data
         vel_pred = vel
-        res_pred = torch.cat([pos_pred[:,:-1] - position[:,1:], 1 - torch.abs(q_pred[:,:-1]*rotation[:,1:]).sum(dim=-1).unsqueeze(-1)], 2)
+        res_pred = torch.cat([pos_pred[:,:-1] - position[:,1:], 100*(1 - 1*torch.abs(q_pred[:,:-1]*rotation[:,1:]).sum(dim=-1).unsqueeze(-1))], 2)
         # ipdb.set_trace()
         return res_pred, pose_pred, vel_pred
     def res_preds_sum(poses):
@@ -113,10 +137,11 @@ def predict(poses, velocities, imu_meas, times, dt=1, jacobian=True):
         # Jf[0::4, 0::3] = torch.eye(poses.shape[0])
         Gq = attitude_jacobian(poses[:,:,3:])
         Jf = torch.autograd.functional.jacobian(res_preds_sum, poses.reshape(bsz, -1)).reshape(bsz, -1, 7)
-        Gq = Gq[:, None].repeat(bsz, (N-1)*4, 1, 1, 1).reshape(bsz, -1, 4, 3)
+        # Jf = torch.zeros(bsz, num_res*N, 7)
+        Gq = Gq[:, None].repeat(bsz, num_res, 1, 1, 1).reshape(bsz, -1, 4, 3)
         Jf = torch.cat([Jf[:,:,:3], (Jf[:,:,3:,None] * Gq).sum(dim=2)], dim=2)
-        Jf = Jf.reshape(bsz, (N-1)*4, N*6)
-        # Jf = Jf.reshape(bsz, (N-1), 4, N, 6)[:, :, :3, :, :3].reshape(bsz, (N-1)*3, N*3)
+        Jf = Jf.reshape(bsz, num_res, N*6)
+        # Jf = Jf.reshape(bsz, (N-1), num_res/(N-1), N, 6)[:, :, :3, :, :3].reshape(bsz, (N-1)*3, N*3)
         return res_pred, pose_pred, vel_pred, 0, 0, Jf
     
     return res_pred, pose_pred, vel_pred
@@ -503,7 +528,7 @@ def deg_to_rad(deg):
 
 def ecef_to_eci(x_ecef, y_ecef, z_ecef, gmst):
     # Step 1: Convert ECEF to ECI coordinates
-    theta = gmst #+ deg_to_rad(90.0)  # Convert GMST to radians and add 90 degrees
+    theta = deg_to_rad(gmst) #+ deg_to_rad(90.0)  # Convert GMST to radians and add 90 degrees
 
     x_eci = x_ecef * np.cos(theta) - y_ecef * np.sin(theta)
     y_eci = x_ecef * np.sin(theta) + y_ecef * np.cos(theta)
@@ -547,8 +572,8 @@ def geodetic_to_ecef(latitude, longitude, altitude):
     # Step 3: Convert latitude, longitude, altitude to ECEF coordinates
     x_ecef = (N + altitude) * np.cos(phi) * np.cos(lambda_)
     y_ecef = (N + altitude) * np.cos(phi) * np.sin(lambda_)
-    # z_ecef = ((b**2 / a**2) * N + altitude) * torch.sin(phi)
-    z_ecef = (N + altitude) * np.sin(phi)
+    z_ecef = ((b**2 / a**2) * N + altitude) * np.sin(phi)
+    # z_ecef = (N + altitude) * np.sin(phi)
 
     return x_ecef, y_ecef, z_ecef
 
@@ -610,31 +635,59 @@ def convert_pos_to_quaternion(pos_eci):
 
 def convert_quaternion_to_xyz_orientation(quat, times):
     # Step 1: convert quat to rotation matrix
+    # NEED TO SWITCH  QUAT FROM [qw, q1, q2, q3] to [q1, q2, q3, qw]
     rot = transform.Rotation.from_quat(quat)
     R = rot.as_matrix()
 
     # Step 2: comvert to ECEF from ECI
     Rz = get_Rz(times)
-    R = Rz @ R
+    R = np.matmul(Rz, R)
 
 
     # Step 3: compute the x, y, z axis
+    # xc, yc, zc = R[:, :, 0], R[:, :, 1], R[:, :, 2]
     xc, yc, zc = R[:, 0], R[:, 1], R[:, 2]
     right_vector = xc
-    up_vector = -yc
+    up_vector = yc
     forward_vector = zc
 
     return forward_vector, up_vector, right_vector 
 
+def convert_xyz_orientation_to_quat(xc, yc, zc, times):
+
+    R = np.stack([-xc, -yc, zc], axis=-1)
+    # right_vector = xc
+    # up_vector = yc
+    # forward_vector = zc
+
+    # # Step 2: comvert from ECEF to ECI
+    RzT = get_Rz(times).transpose(0, 2, 1)
+    R = np.matmul(RzT, R)
+    
+    # Step 3: convert rotation matrix to quaternion
+    rot = transform.Rotation.from_matrix(R)
+    quaternion = rot.as_quat()
+    # quaternion = np.concatenate([quaternion[:, 1:], quaternion[:, :1]], axis=-1)
+
+    return quaternion
+
+
+# def compute_omega_from_quat(quat, dt):
+#     phis = quaternion_log(quat)
+#     omega = (phis[1:] - phis[:-1]) / dt
+#     omega = torch.cat([omega, torch.zeros((1, 3))], dim=0)
+#     return omega
 
 def compute_omega_from_quat(quat, dt):
-    phis = quaternion_log(quat)
-    omega = (phis[1:] - phis[:-1]) / dt
+    dq = quaternion_multiply(quaternion_conjugate(quat[:-1]), quat[1:])
+    dq /= dq.norm(dim=-1).unsqueeze(-1)
+    phi = quaternion_log(dq)
+    omega = phi / dt
     omega = torch.cat([omega, torch.zeros((1, 3))], dim=0)
     return omega
 
+
 def compute_velocity_from_pos(gt_pos_eci, dt):
-    # ipdb.set_trace()
     gt_vel_eci = (gt_pos_eci[1:] - gt_pos_eci[:-1]) / dt
     gt_vel_eci = np.concatenate([gt_vel_eci, np.zeros((1, 3))], axis=0)
     return gt_vel_eci

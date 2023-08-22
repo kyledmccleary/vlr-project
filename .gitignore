@@ -9,5 +9,6 @@ datasets/
 *.zip
 *.yaml
 lisp/
+code/landmarks/*
 
 
