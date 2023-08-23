@@ -125,7 +125,7 @@ def predict(poses, velocities, imu_meas, times, dt=1, jacobian=True):
         # q_pred = quaternion_exp(phi_pred)#.data  # TODO: why .data?
         pose_pred = torch.cat([pos_pred, q_pred], 2) # TODO: why .data? for quaternion_exp().data
         vel_pred = vel
-        res_pred = torch.cat([pos_pred[:,:-1] - position[:,1:], 100*(1 - 1*torch.abs(q_pred[:,:-1]*rotation[:,1:]).sum(dim=-1).unsqueeze(-1))], 2)
+        res_pred = torch.cat([pos_pred[:,:-1] - position[:,1:], 10*(1 - 1*torch.abs(q_pred[:,:-1]*rotation[:,1:]).sum(dim=-1).unsqueeze(-1))], 2)
         # ipdb.set_trace()
         return res_pred, pose_pred, vel_pred
     def res_preds_sum(poses):
@@ -636,6 +636,7 @@ def convert_pos_to_quaternion(pos_eci):
 def convert_quaternion_to_xyz_orientation(quat, times):
     # Step 1: convert quat to rotation matrix
     # NEED TO SWITCH  QUAT FROM [qw, q1, q2, q3] to [q1, q2, q3, qw]
+    quat = np.concatenate([quat[:, 1:], quat[:, :1]], axis=-1)
     rot = transform.Rotation.from_quat(quat)
     R = rot.as_matrix()
 
@@ -645,10 +646,10 @@ def convert_quaternion_to_xyz_orientation(quat, times):
 
 
     # Step 3: compute the x, y, z axis
-    # xc, yc, zc = R[:, :, 0], R[:, :, 1], R[:, :, 2]
-    xc, yc, zc = R[:, 0], R[:, 1], R[:, 2]
-    right_vector = xc
-    up_vector = yc
+    xc, yc, zc = R[:, :, 0], R[:, :, 1], R[:, :, 2]
+    # xc, yc, zc = R[:, 0], R[:, 1], R[:, 2]
+    right_vector = -xc
+    up_vector = -yc
     forward_vector = zc
 
     return forward_vector, up_vector, right_vector 
