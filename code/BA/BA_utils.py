@@ -93,7 +93,7 @@ def propagate_rotation_dynamics(quaternion, omegas, times, dt):
     # vel_pred = x_pred[:, :, 3:]
     return q_pred
 
-def predict(poses, velocities, imu_meas, times, dt=1, jacobian=True):
+def predict(poses, velocities, imu_meas, times, quat_coeff, dt=1, jacobian=True):
     w, a = imu_meas[..., :3], imu_meas[..., 3:]
     # phi = quaternion_log(poses[:,:,3:])
     # position = poses[:,:,:3]
@@ -125,7 +125,7 @@ def predict(poses, velocities, imu_meas, times, dt=1, jacobian=True):
         # q_pred = quaternion_exp(phi_pred)#.data  # TODO: why .data?
         pose_pred = torch.cat([pos_pred, q_pred], 2) # TODO: why .data? for quaternion_exp().data
         vel_pred = vel
-        res_pred = torch.cat([pos_pred[:,:-1] - position[:,1:], 10*(1 - 1*torch.abs(q_pred[:,:-1]*rotation[:,1:]).sum(dim=-1).unsqueeze(-1))], 2)
+        res_pred = torch.cat([pos_pred[:,:-1] - position[:,1:], quat_coeff*(1 - 1*torch.abs(q_pred[:,:-1]*rotation[:,1:]).sum(dim=-1).unsqueeze(-1))], 2)
         # ipdb.set_trace()
         return res_pred, pose_pred, vel_pred
     def res_preds_sum(poses):

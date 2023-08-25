@@ -120,7 +120,8 @@ def process_ground_truths(orbit, landmarks_dict, intrinsics, dt, time_idx):
 
 def read_data(sample_dets=False):
     if not sample_dets:
-        landmarks = np.load("landmarks/all_dets.npy", allow_pickle=True)
+        # landmarks = np.load("landmarks/all_dets.npy", allow_pickle=True)
+        landmarks = np.load("landmarks/dets.npy", allow_pickle=True)
     else:
         landmarks = np.load("landmarks/sample_dets.npy", allow_pickle=True)
     landmarks_dict = {
@@ -129,6 +130,8 @@ def read_data(sample_dets=False):
             "lonlat" : [],
             "confidence" : [],
         }
+    times = np.load("landmarks/times.npy", allow_pickle=True)
+    # ipdb.set_trace()
     time_idx = []
     ii = []
     filler_idx = 1
@@ -136,13 +139,13 @@ def read_data(sample_dets=False):
         # if i > 13 and i <21:
         #     continue
         num_points = 0
-        while  filler_idx*1000 < landmarks[i,0]:
+        while  filler_idx*1000 < times[landmarks[i,0]]:
             time_idx.append(filler_idx*1000)
             filler_idx += 1
         for j in range(len(landmarks[i,1])):
             # if landmarks[i,1][j][3] < 0.5:
             #     continue
-            landmarks_dict["frame"].append(landmarks[i,0])
+            landmarks_dict["frame"].append(times[landmarks[i,0]])
             landmarks_dict["uv"].append(landmarks[i,1][j][:2])
             if not sample_dets:
                 landmarks_dict["lonlat"].append(landmarks[i,1][j][2])#[2:4])#
@@ -153,7 +156,7 @@ def read_data(sample_dets=False):
             ii.append(len(time_idx))
             num_points += 1
         if num_points > 0:
-            time_idx.append(landmarks[i,0])
+            time_idx.append(times[landmarks[i,0]])
     # ipdb.set_trace()
     ii = np.array(ii)
     time_idx = np.array(time_idx)# - 1
@@ -162,7 +165,7 @@ def read_data(sample_dets=False):
     landmarks_dict["lonlat"] = np.array(landmarks_dict["lonlat"])
     landmarks_dict["confidence"] = np.array(landmarks_dict["confidence"])
 
-    with open('landmarks/orbit_eci_quat.txt', 'r') as infile:
+    with open('landmarks/orbit_eci_quat2.txt', 'r') as infile:
         orbit = json.load(infile)
     orbit = np.array(orbit)
 
@@ -221,15 +224,15 @@ if __name__ == "__main__":
     # gt_acceleration = RK4_orbit_dynamics_avg(x, h) #RK4_avg(x, t, h, params)
     # gt_acceleration = compute_velocity_from_pos(gt_vel_eci, dt)
     landmark_uv_proj = landmark_project(poses_gt_eci.unsqueeze(0), landmarks_xyz.unsqueeze(0), intrinsics.unsqueeze(0), ii, jacobian=False)
-    mask = ((landmark_uv_proj[:, :, 0] > 0)*(landmark_uv_proj[:, :, 1] > 0)*(landmark_uv_proj[:, :, 0] < 2600)*(landmark_uv_proj[:, :, 1] < 2000))[0]
+    mask = ((landmark_uv_proj[:, :, 0] > 0)*(landmark_uv_proj[:, :, 1] > 0)*(landmark_uv_proj[:, :, 0] < 2600)*(landmark_uv_proj[:, :, 1] < 2000)*((landmark_uv_proj - landmarks_uv[None]).norm(dim=-1)<1000) )[0]
     print("mean landmark difference : ", ((landmark_uv_proj[0,:] - landmarks_uv)*mask.float().unsqueeze(-1)).abs().mean(dim=0))
-    mask[17] = False
+    # mask[17] = False
     # gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_quat_eci_full, landmarks_xyz, landmarks_uv, intrinsics, gt_acceleration, ii, time_idx, mask = remove_elems(mask, gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_quat_eci_full, landmarks_xyz, landmarks_uv, intrinsics, gt_acceleration, ii, time_idx)
     # ipdb.set_trace()
-    ii = ii[mask][:-5]
-    # landmarks_xyz, landmarks_uv, landmark_uv_proj = landmarks_xyz[mask], landmarks_uv[mask], landmark_uv_proj[:, mask]
-    landmarks_xyz, landmarks_uv, landmark_uv_proj = landmarks_xyz[mask][:-5], landmarks_uv[mask][:-5], landmark_uv_proj[:, mask][:,:-5]#, ii[mask][:-5]
-    confidences = torch.tensor(landmarks_dict["confidence"])[mask].float()[:-5]
+    ii = ii[mask]#[:-5]
+    landmarks_xyz, landmarks_uv, landmark_uv_proj = landmarks_xyz[mask], landmarks_uv[mask], landmark_uv_proj[:, mask]
+    # landmarks_xyz, landmarks_uv, landmark_uv_proj = landmarks_xyz[mask][:-5], landmarks_uv[mask][:-5], landmark_uv_proj[:, mask][:,:-5]#, ii[mask][:-5]
+    confidences = torch.tensor(landmarks_dict["confidence"])[mask].float()#[:-5]
     print("mean landmark difference : ", ((landmark_uv_proj[0,:] - landmarks_uv)).abs().mean(dim=0))
     ipdb.set_trace()
     # landmarks_uv = landmark_uv_proj[0, :]
@@ -265,9 +268,9 @@ if __name__ == "__main__":
     landmarks_uv = landmarks_uv.unsqueeze(0)
     landmarks_xyz = landmarks_xyz.unsqueeze(0)
     intrinsics = intrinsics.unsqueeze(0)
-    
+    lamda_init = 1e-4
 
     for i in range(num_iters):
-        poses, velocities = BA(i, poses, velocities, imu_meas, landmarks_uv, landmarks_xyz, ii, time_idx, intrinsics, confidences, Sigma, V, poses_gt_eci)
+        poses, velocities, lamda_init = BA(i, poses, velocities, imu_meas, landmarks_uv, landmarks_xyz, ii, time_idx, intrinsics, confidences, Sigma, V, lamda_init, poses_gt_eci)
 
 
