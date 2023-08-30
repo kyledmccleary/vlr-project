@@ -55,7 +55,7 @@ def landmark_project(poses, landmarks_xyz, intrinsics, ii, jacobian=True):
         # Jg = torch.autograd.functional.jacobian(landmark_est.reshape(-1, 2), poses_ii.reshape(-1,7))
         Jg = torch.autograd.functional.jacobian(project_ii_sum, poses_ii, vectorize=True).transpose(0,1)
         # ipdb.set_trace()
-        Jg = torch.cat([Jg[:,:,:3], torch.bmm(Jg[:,:,3:], Gq)], dim=2).reshape(-1, 2, 6)
+        Jg = torch.cat([Jg[:,:,:3], torch.bmm(Jg[:,:,3:], Gq/2)], dim=2).reshape(-1, 2, 6)
         return landmark_est, Jg
     return landmark_est
 
@@ -125,13 +125,13 @@ def predict(poses, velocities, imu_meas, times, quat_coeff, dt=1, jacobian=True)
         # q_pred = quaternion_exp(phi_pred)#.data  # TODO: why .data?
         pose_pred = torch.cat([pos_pred, q_pred], 2) # TODO: why .data? for quaternion_exp().data
         vel_pred = vel
-        res_pred = torch.cat([pos_pred[:,:-1] - position[:,1:], quat_coeff*(1 - 1*torch.abs(q_pred[:,:-1]*rotation[:,1:]).sum(dim=-1).unsqueeze(-1))], 2)
+        res_pred = torch.cat([(pos_pred[:,:-1] - position[:,1:]), quat_coeff*(1 - 1*torch.abs(q_pred[:,:-1]*rotation[:,1:]).sum(dim=-1).unsqueeze(-1))], 2)
         # ipdb.set_trace()
-        return res_pred, pose_pred, vel_pred
+        return res_pred, pose_pred, vel_pred, quat_coeff*torch.abs(q_pred[:,:-1]*rotation[:,1:]).sum(dim=-1)
     def res_preds_sum(poses):
         poses = poses.reshape(bsz, -1, 7)
         return res_preds(poses)[0].sum(dim=0).reshape(-1)
-    res_pred, pose_pred, vel_pred = res_preds(poses)
+    res_pred, pose_pred, vel_pred, qdot = res_preds(poses)
     if jacobian:
         # Jf = torch.zeros(4*poses.shape[0], 3*poses.shape[1])
         # Jf[0::4, 0::3] = torch.eye(poses.shape[0])
@@ -139,10 +139,15 @@ def predict(poses, velocities, imu_meas, times, quat_coeff, dt=1, jacobian=True)
         Jf = torch.autograd.functional.jacobian(res_preds_sum, poses.reshape(bsz, -1)).reshape(bsz, -1, 7)
         # Jf = torch.zeros(bsz, num_res*N, 7)
         Gq = Gq[:, None].repeat(bsz, num_res, 1, 1, 1).reshape(bsz, -1, 4, 3)
-        Jf = torch.cat([Jf[:,:,:3], (Jf[:,:,3:,None] * Gq).sum(dim=2)], dim=2)
+        Jf = torch.cat([Jf[:,:,:3], (Jf[:,:,3:,None] * Gq/2).sum(dim=2)], dim=2)
         Jf = Jf.reshape(bsz, num_res, N*6)
+        qdotzero = torch.zeros_like(qdot[:, :1])
+        qdotabs = torch.abs(qdot)
+        Hq1 = torch.eye(3, 3)[None, None]*torch.cat([qdotzero, qdotabs], dim=1)[:,:,None,None]
+        Hq2 = torch.eye(3, 3)[None, None]*torch.cat([qdotabs, qdotzero], dim=1)[:,:,None,None]
+        Hq = Hq1 + Hq2
         # Jf = Jf.reshape(bsz, (N-1), num_res/(N-1), N, 6)[:, :, :3, :, :3].reshape(bsz, (N-1)*3, N*3)
-        return res_pred, pose_pred, vel_pred, 0, 0, Jf
+        return res_pred, pose_pred, vel_pred, 0, 0, Jf, Hq
     
     return res_pred, pose_pred, vel_pred
 
@@ -332,7 +337,7 @@ def quaternion_exp(d_theta):
         np.ndarray: The resulting quaternion [w, x, y, z].
     """
     theta = d_theta.norm(dim=-1).unsqueeze(-1)
-    mask = (theta < 1e-6).float()
+    mask = (theta < 1e-6).double()
     Identity = torch.cat([torch.zeros_like(d_theta), torch.ones_like(theta)], dim=-1)  # Identity quaternion when theta is close to zero.
     q = torch.cat([d_theta * torch.sin(theta / 2) / (theta + 1e-6), torch.cos(theta / 2)], dim=-1)
     q = Identity*mask + q*(1-mask)
@@ -526,7 +531,9 @@ e = np.sqrt(1 - (b**2 / a**2))
 def deg_to_rad(deg):
     return np.deg2rad(deg)
 
-def ecef_to_eci(x_ecef, y_ecef, z_ecef, gmst):
+def ecef_to_eci(x_ecef, y_ecef, z_ecef, gmst=None, times=None):
+    if times is not None:
+        gmst = theta_G0_deg + omega_earth_deg_per_sec * times
     # Step 1: Convert ECEF to ECI coordinates
     theta = deg_to_rad(gmst) #+ deg_to_rad(90.0)  # Convert GMST to radians and add 90 degrees
 
@@ -633,7 +640,7 @@ def convert_pos_to_quaternion(pos_eci):
     quaternion = rot.as_quat()
     return quaternion
 
-def convert_quaternion_to_xyz_orientation(quat, times):
+def convert_quaternion_to_xyz_orientation_fixed(quat, times):
     # Step 1: convert quat to rotation matrix
     # NEED TO SWITCH  QUAT FROM [qw, q1, q2, q3] to [q1, q2, q3, qw]
     quat = np.concatenate([quat[:, 1:], quat[:, :1]], axis=-1)
@@ -650,6 +657,27 @@ def convert_quaternion_to_xyz_orientation(quat, times):
     # xc, yc, zc = R[:, 0], R[:, 1], R[:, 2]
     right_vector = -xc
     up_vector = -yc
+    forward_vector = zc
+
+    return forward_vector, up_vector, right_vector 
+
+def convert_quaternion_to_xyz_orientation(quat, times):
+    # Step 1: convert quat to rotation matrix
+    # NEED TO SWITCH  QUAT FROM [qw, q1, q2, q3] to [q1, q2, q3, qw]
+    # quat = np.concatenate([quat[:, 1:], quat[:, :1]], axis=-1)
+    rot = transform.Rotation.from_quat(quat)
+    R = rot.as_matrix()
+
+    # Step 2: comvert to ECEF from ECI
+    Rz = get_Rz(times)
+    R = np.matmul(Rz, R)
+
+
+    # Step 3: compute the x, y, z axis
+    # xc, yc, zc = R[:, :, 0], R[:, :, 1], R[:, :, 2]
+    xc, yc, zc = R[:, 0], R[:, 1], R[:, 2]
+    right_vector = xc
+    up_vector = yc
     forward_vector = zc
 
     return forward_vector, up_vector, right_vector 
