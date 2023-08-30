@@ -125,7 +125,7 @@ def predict(poses, velocities, imu_meas, times, quat_coeff, dt=1, jacobian=True)
         # q_pred = quaternion_exp(phi_pred)#.data  # TODO: why .data?
         pose_pred = torch.cat([pos_pred, q_pred], 2) # TODO: why .data? for quaternion_exp().data
         vel_pred = vel
-        res_pred = torch.cat([(pos_pred[:,:-1] - position[:,1:]), quat_coeff*(1 - 1*torch.abs(q_pred[:,:-1]*rotation[:,1:]).sum(dim=-1).unsqueeze(-1))], 2)
+        res_pred = torch.cat([(pos_pred[:,:-1] - position[:,1:])*0, quat_coeff*(1 - 1*torch.abs(q_pred[:,:-1]*rotation[:,1:]).sum(dim=-1).unsqueeze(-1))], 2)
         # ipdb.set_trace()
         return res_pred, pose_pred, vel_pred, quat_coeff*torch.abs(q_pred[:,:-1]*rotation[:,1:]).sum(dim=-1)
     def res_preds_sum(poses):

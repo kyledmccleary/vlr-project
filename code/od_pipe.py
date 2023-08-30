@@ -97,8 +97,8 @@ def process_ground_truths(orbit, landmarks_dict, intrinsics, dt, time_idx):
     gt_vel_eci = compute_velocity_from_pos(orbit[:,:3], dt) # orbit[:,3:6]
     # gt_vel_eci = compute_velocity_from_pos(gt_pos_eci, dt)
     # gt_quat_eci_full = np.concatenate([orbit[:,7:10], orbit[:, 6:7]], axis=-1)#convert_pos_to_quaternion(gt_pos_eci)
-    # zc, yc, xc = convert_quaternion_to_xyz_orientation(orbit[:,6:10], np.arange(len(orbit)))
-    zc, yc, xc = orbit[:, 3:6], orbit[:, 6:9], orbit[:, 9:12]
+    zc, yc, xc = convert_quaternion_to_xyz_orientation(orbit[:,6:10], np.arange(len(orbit)))
+    # zc, yc, xc = orbit[:, 3:6], orbit[:, 6:9], orbit[:, 9:12]
     gt_quat_eci_full = convert_xyz_orientation_to_quat(xc, yc, zc, np.arange(len(orbit)))
     # ipdb.set_trace()
     gt_quat_eci = gt_quat_eci_full[time_idx, :]
@@ -245,8 +245,8 @@ if __name__ == "__main__":
 
     ### Read data 
     sample_dets = False
-    # orbit, landmarks_dict, intrinsics, time_idx, ii = read_data(sample_dets)
-    orbit, landmarks_dict, intrinsics, time_idx, ii = read_detections(sample_dets)
+    orbit, landmarks_dict, intrinsics, time_idx, ii = read_data(sample_dets)
+    # orbit, landmarks_dict, intrinsics, time_idx, ii = read_detections(sample_dets)
     gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_quat_eci_full, landmarks_xyz, landmarks_uv, intrinsics, gt_acceleration = process_ground_truths(orbit, landmarks_dict, intrinsics, dt, time_idx)
 
     ### Obtain acceleration from orbital dynamics and angular velocity from IMU
@@ -290,10 +290,10 @@ if __name__ == "__main__":
         omegas[:, i-1, :time_idx[i]-time_idx[i-1], :] = gt_omega[time_idx[i-1]:time_idx[i], :].unsqueeze(0).double()
         accelerations[:, i-1, :time_idx[i]-time_idx[i-1], :] = gt_acceleration[time_idx[i-1]:time_idx[i], :].unsqueeze(0).double()
     imu_meas = torch.cat((omegas, accelerations), dim=-1)   # for now, assume that the IMU gives us the accurate angular velocity and acceleration
-    position_offset = torch.randn((T, 3))*100
+    position_offset = torch.randn((T, 3))*0#*100
     # position_offset[0, :] = 0
     orientation_offset = torch.randn([T, 3])*0.2
-    # orientation_offset[0, :] = 0
+    orientation_offset[0, :] = 0
     position = poses_gt_eci.double()[:, :3] + position_offset
     orientation = quaternion_exp(quaternion_log(poses_gt_eci.double()[:, 3:]) + orientation_offset)
     poses = torch.cat([position, orientation], dim=1).unsqueeze(0)
