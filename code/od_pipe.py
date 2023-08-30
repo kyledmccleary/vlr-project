@@ -181,7 +181,7 @@ def read_data(sample_dets=False):
     return orbit, landmarks_dict, intrinsics, time_idx, ii
 
 def read_detections(sample_dets=False):
-    landmarks = np.load("landmarks/detections.npy", allow_pickle=True)
+    landmarks = np.load("landmarks/detections_new.npy", allow_pickle=True)
     landmarks_dict = {}
     # ipdb.set_trace()
     landmarks_dict["frame"] = landmarks[:,0]
@@ -204,16 +204,16 @@ def read_detections(sample_dets=False):
     return orbit, landmarks_dict, intrinsics, time_idx, ii
 
 def remove_elems(mask, gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_quat_eci_full, landmarks_xyz, landmarks_uv, intrinsics, gt_acceleration, ii, time_idx):
-    ii_old = ii[mask][:-5]
+    ii_old = ii[mask]#[:-5]
     import copy
-    ii_new = copy.deepcopy(ii[mask][:-5])
+    ii_new = copy.deepcopy(ii[mask])#[:-5])
     mask_poses = np.unique(ii_old)
-    for i in range(ii_old.max()):
-        if (i==ii_old).sum() > 2:
-            mask_poses.append(i)
-        else:
-            mask1 = (ii_old != i)
-            mask = mask*mask1
+    # for i in range(ii_old.max()):
+    #     if (i==ii_old).sum() > 0:
+    #         mask_poses.append(i)
+        # else:
+        #     mask1 = (ii_old != i)
+        #     mask = mask*mask1
             
     for i in range(ii_old.max()):
         if i not in ii_old:
@@ -256,20 +256,25 @@ if __name__ == "__main__":
     # gt_acceleration = RK4_orbit_dynamics_avg(x, h) #RK4_avg(x, t, h, params)
     # gt_acceleration = compute_velocity_from_pos(gt_vel_eci, dt)
     landmark_uv_proj = landmark_project(poses_gt_eci.unsqueeze(0), landmarks_xyz.unsqueeze(0), intrinsics.unsqueeze(0), ii, jacobian=False)
-    mask = ((landmark_uv_proj[:, :, 0] > 0)*(landmark_uv_proj[:, :, 1] > 0)*(landmark_uv_proj[:, :, 0] < 2600)*(landmark_uv_proj[:, :, 1] < 2000)*((landmark_uv_proj - landmarks_uv[None]).norm(dim=-1)<1000) )[0]
+    mask = ((landmark_uv_proj[:, :, 0] > 0)*(landmark_uv_proj[:, :, 1] > 0)*(landmark_uv_proj[:, :, 0] < 2600)*(landmark_uv_proj[:, :, 1] < 2000)*((landmark_uv_proj - landmarks_uv[None]).norm(dim=-1)<1000)*(torch.tensor(landmarks_dict["confidence"][None])>0.6) )[0]
     print("mean landmark difference : ", ((landmark_uv_proj[0,:] - landmarks_uv)*mask.double().unsqueeze(-1)).abs().mean(dim=0))
     print(torch.cat([(landmark_uv_proj[0,:] - landmarks_uv), torch.tensor(landmarks_dict["confidence"])[:,None], landmark_uv_proj[0]], dim=-1)[:20])
     # mask[17] = False
-    # gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_quat_eci_full, landmarks_xyz, landmarks_uv, intrinsics, gt_acceleration, ii, time_idx, mask = remove_elems(mask, gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_quat_eci_full, landmarks_xyz, landmarks_uv, intrinsics, gt_acceleration, ii, time_idx)
+    gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_quat_eci_full, landmarks_xyz, landmarks_uv, intrinsics, gt_acceleration, ii, time_idx = remove_elems(mask, gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_quat_eci_full, landmarks_xyz, landmarks_uv, intrinsics, gt_acceleration, ii, time_idx)
     # ipdb.set_trace()
-    ii = ii[mask]#[:-5]
+    # ii = ii[mask]#[:-5]
     landmarks_xyz, landmarks_uv, landmark_uv_proj = landmarks_xyz[mask], landmarks_uv[mask], landmark_uv_proj[:, mask]
     # landmarks_xyz, landmarks_uv, landmark_uv_proj = landmarks_xyz[mask][:-5], landmarks_uv[mask][:-5], landmark_uv_proj[:, mask][:,:-5]#, ii[mask][:-5]
     confidences = torch.tensor(landmarks_dict["confidence"])[mask].double()#[:-5]
     print("mean landmark difference : ", ((landmark_uv_proj[0,:] - landmarks_uv)).abs().mean(dim=0))
     # print(torch.cat([(landmark_uv_proj[0,:] - landmarks_uv), torch.tensor(landmarks_dict["confidence"])[mask][:,None], landmark_uv_proj[0]], dim=-1)[:100])
     ipdb.set_trace()
-    noise_level = 0.0#5
+    elems = torch.where(torch.logical_and((landmark_uv_proj[0,:] - landmarks_uv).norm(dim=-1) > 10, torch.tensor(landmarks_dict["confidence"])[mask]>0.6))[0]
+    print(torch.cat([(landmark_uv_proj[0,:] - landmarks_uv)[elems], torch.tensor(landmarks_dict["confidence"])[mask][elems][:,None]], dim=-1)[:100])
+    elem_count = [(ii[e.item()]==ii).sum() for e in elems]
+    # print(elem_count)
+    ipdb.set_trace()
+    noise_level = 1.0
     landmarks_uv += (landmark_uv_proj[0, :] - landmarks_uv)*(1-noise_level)
         
     ### Initial guess for poses, velocities

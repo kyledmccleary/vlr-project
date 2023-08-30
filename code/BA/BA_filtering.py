@@ -26,7 +26,7 @@ def BA(iter, poses, velocities, imu_meas, landmarks, landmarks_xyz, ii, time_idx
 	landmark_est, Jg = landmark_project(poses, landmarks_xyz, intrinsics, ii, jacobian=True)
 	r_pred, pose_pred, vel_pred, Ji, Ji_1, Jf, Hq = predict(poses, velocities, imu_meas, time_idx, quat_coeff, jacobian=True) 
 	r_obs = (landmarks - landmark_est)
-	alpha = max(1 - (2*(iter/5) - 1), -4)
+	alpha = max(0 - (2*(iter/5) - 1), -1)
 	c_obs = r_obs.abs().median()
 	wts_obs = (((((r_obs/c_obs)**2)/abs(alpha-2) + 1)**(alpha/2 - 1)) / ((c_obs)**2)).mean(dim=-1).unsqueeze(-1).unsqueeze(-1)[0]
 	# ipdb.set_trace()
@@ -121,7 +121,7 @@ def BA(iter, poses, velocities, imu_meas, landmarks, landmarks_xyz, ii, time_idx
 			print("lamda too large")
 			break
 		
-	lamda_init = max(min(1e-1, lamda*0.01), lamda_init*0.1)
+	lamda_init = max(min(1e-1, lamda*0.01), 1e-4)
 
 	## backtracking line search
 	alpha = 1
