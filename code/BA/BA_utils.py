@@ -74,24 +74,34 @@ def propagate_orbit_dynamics(position, velocities, times, dt):
     vel_pred = x_pred[:, :, 3:]
     return pos_pred, vel_pred
 
-def propagate_rotation_dynamics(quaternion, omegas, times, dt):
+def propagate_rotation_dynamics(quaternion, omegas, times, dt, jac=False):
     # ipdb.set_trace()
     time_diffs = torch.tensor(times[1:] - times[:-1])
     time_diffs = torch.cat([time_diffs, torch.ones_like(time_diffs[-1:])], dim=0)
     max_time_diff = time_diffs.max()
     q_pred = []
+    bsz, N = quaternion.shape[:2]
+    jac_qpred = torch.eye(4)[None, None].repeat(bsz, N, 1, 1)
     # quaternion = quaternion.reshape(-1, 4)
     # omegas = omegas.reshape(-1, len(max_time_diff), 3)
     # ipdb.set_trace()
     for i in range(max_time_diff):
-        quaternion = quaternion_multiply(quaternion, quaternion_exp(dt * omegas[:, :, i]))
-        q_pred.append(quaternion)
+        quaternion_out = quaternion_multiply(quaternion, quaternion_exp(dt * omegas[:, :, i]))
+        if jac:
+            mask = (i < time_diffs).float()[None, :, None, None]
+            jac_i = quaternion_jacobian(dt * omegas[:, :, i])
+            jac_qpred[:, mask] = (jac_i[:,mask][..., None]*jac_qpred[:, mask, None]).sum(dim=-2)
+        q_pred.append(quaternion_out)
+        quaternion = quaternion_out
+    
+
     q_pred = torch.stack(q_pred, dim=-2)
     # q_pred = q_pred.reshape(bsz, -1, len(max_time_diff), 4)
     q_pred = q_pred[:, torch.arange(len(time_diffs)), time_diffs-1]#torch.zeros_like(time_diffs-1)]
     # pos_pred = x_pred[:, :, :3]
     # vel_pred = x_pred[:, :, 3:]
-    return q_pred
+    return q_pred, jac_qpred
+
 
 def predict(poses, velocities, imu_meas, times, quat_coeff, dt=1, jacobian=True):
     w, a = imu_meas[..., :3], imu_meas[..., 3:]
@@ -110,7 +120,7 @@ def predict(poses, velocities, imu_meas, times, quat_coeff, dt=1, jacobian=True)
     bsz = poses.shape[0]
     N = poses.shape[1]
     num_res = (N-1)*4
-    def res_preds(poses):
+    def res_preds(poses, jac=False):
         # phi = quaternion_log(poses[:,:,3:])
         # ipdb.set_trace()
         position = poses[:,:,:3]
@@ -118,7 +128,8 @@ def predict(poses, velocities, imu_meas, times, quat_coeff, dt=1, jacobian=True)
         # pos_pred, vel_pred = propagate_dynamics(position, velocities, times, dt)
         vel = velocities + dt * a#apply_pose_transformation_quat(a, rotation) # SO3(rotation).act(a.unsqueeze(-1)).squeeze(-1)
         pos_pred = position + dt * velocities.sum(dim=-2)
-        q_pred = propagate_rotation_dynamics(rotation, w, times, dt)
+        q_pred, jac_qpred = propagate_rotation_dynamics(rotation, w, times, dt, jac)
+        jac_ppred = torch.eye(3,3)[None, None].repeat(bsz, N, 1, 1)
         # ipdb.set_trace()
         # q_pred = quaternion_multiply(poses[:,:,3:], quaternion_exp(dt * w))#.data  # TODO: why .data?
         # phi_pred = phi + dt * w.sum(dim=-2)
@@ -126,28 +137,47 @@ def predict(poses, velocities, imu_meas, times, quat_coeff, dt=1, jacobian=True)
         pose_pred = torch.cat([pos_pred, q_pred], 2) # TODO: why .data? for quaternion_exp().data
         vel_pred = vel
         res_pred = torch.cat([(pos_pred[:,:-1] - position[:,1:])*0, quat_coeff*(1 - 1*torch.abs(q_pred[:,:-1]*rotation[:,1:]).sum(dim=-1).unsqueeze(-1))], 2)
+        qthat = q_pred[:,:-1]
+        qt = rotation[:,1:]
+        qt1 = rotation[:,:-1]
         # ipdb.set_trace()
-        return res_pred, pose_pred, vel_pred, quat_coeff*torch.abs(q_pred[:,:-1]*rotation[:,1:]).sum(dim=-1)
+        return res_pred, pose_pred, vel_pred, quat_coeff*torch.abs(q_pred[:,:-1]*rotation[:,1:]).sum(dim=-1), jac_ppred, jac_qpred, qt, qt1, qthat
     def res_preds_sum(poses):
         poses = poses.reshape(bsz, -1, 7)
         return res_preds(poses)[0].sum(dim=0).reshape(-1)
-    res_pred, pose_pred, vel_pred, qdot = res_preds(poses)
+    res_pred, pose_pred, vel_pred, qdot, jac_ppred, jac_qpred, qt, qt1, qthat = res_preds(poses, jacobian)
     if jacobian:
         # Jf = torch.zeros(4*poses.shape[0], 3*poses.shape[1])
         # Jf[0::4, 0::3] = torch.eye(poses.shape[0])
         Gq = attitude_jacobian(poses[:,:,3:])
-        Jf = torch.autograd.functional.jacobian(res_preds_sum, poses.reshape(bsz, -1)).reshape(bsz, -1, 7)
+        Jf = torch.autograd.functional.jacobian(res_preds_sum, poses.reshape(bsz, -1), vectorize=True).reshape(bsz, -1, 7)
         # Jf = torch.zeros(bsz, num_res*N, 7)
         Gq = Gq[:, None].repeat(bsz, num_res, 1, 1, 1).reshape(bsz, -1, 4, 3)
         Jf = torch.cat([Jf[:,:,:3], (Jf[:,:,3:,None] * Gq/2).sum(dim=2)], dim=2)
         Jf = Jf.reshape(bsz, num_res, N*6)
         qdotzero = torch.zeros_like(qdot[:, :1])
-        qdotabs = torch.abs(qdot)
-        Hq1 = torch.eye(3, 3)[None, None]*torch.cat([qdotzero, qdotabs], dim=1)[:,:,None,None]
-        Hq2 = torch.eye(3, 3)[None, None]*torch.cat([qdotabs, qdotzero], dim=1)[:,:,None,None]
-        Hq = Hq1 + Hq2
+        qdotsign = torch.sign(qdot)
+        Hqtt = torch.cat([qdotzero, qdotsign*qdot], dim=1)[:, :, None, None]*torch.eye(3, 3)[None, None]
+        Hqt1t1 = (qt*(jac_qpred*qt1[:, :, None, :]).sum(dim=-1)).sum(dim=-1)
+        Hqt1t1 = torch.eye(3, 3)[None, None]*torch.cat([qdotsign*Hqt1t1, qdotzero], dim=1)[:,:,None,None]
+        Hqtt1 = (Gq[:, :-1].transpose(-1, -2)[...,None]*(jac_qpred[:, :-1].transpose(-1, -2)[...,None]*Gq[:, 1:, None]).sum(dim=-2)[:, :, None]).sum(dim=-2)
+        # Hqt1t = Hqtt1.transpose(-1, -2)
+        # Hq2 = torch.eye(3, 3)[None, None]*torch.cat([qdotabs, qdotzero], dim=1)[:,:,None,None]
+        # Hq = Hq1 + Hq2
+        Hqdiag = torch.block_diag(*(Hqtt + Hqt1t1)[0].unbind(dim=0)).unsqueeze(0)
+        Hqtt1diag = torch.block_diag(*(Hqtt1)[0].unbind(dim=0)).unsqueeze(0)
+        # Hqt1tdiag = torch.block_diag(*(Hqt1t)[0].unbind(dim=0)).unsqueeze(0)
+        Hqtt1diag = torch.cat([Hqtt1diag, torch.zeros_like(Hqtt1diag)[:,:,:3]], dim=2)
+        Hqtt1diag = torch.cat([torch.zeros_like(Hqtt1diag)[:,:3], Hqtt1diag], dim=1)
+        Hqt1tdiag = Hqtt1diag.transpose(-1, -2)
+        Hq = Hqdiag + Hqtt1diag + Hqt1tdiag
+        Hq_full = torch.zeros(bsz, N, 6, N, 6)
+        Hq_full[:, :, :3, :, :3] = Hq
+        Hq_full = Hq_full.reshape(bsz, N*6, N*6)
+        
+
         # Jf = Jf.reshape(bsz, (N-1), num_res/(N-1), N, 6)[:, :, :3, :, :3].reshape(bsz, (N-1)*3, N*3)
-        return res_pred, pose_pred, vel_pred, 0, 0, Jf, Hq
+        return res_pred, pose_pred, vel_pred, 0, 0, Jf, Hq_full
     
     return res_pred, pose_pred, vel_pred
 
@@ -357,6 +387,16 @@ def quaternion_multiply(q1, q2):
     y_mul = w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2
     z_mul = w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2
     return torch.stack([x_mul, y_mul, z_mul, w_mul], dim=-1)
+
+def quaternion_jacobian(q2):
+    """Compute jacobian of quaternion multiplication w.r.t q1. Returns a 4x4 matrix"""
+    x2, y2, z2, w2 = q2.unbind(dim=-1)
+    return torch.stack([
+        torch.stack([w2, z2, -y2, x2], dim=-1),
+        torch.stack([-z2, w2, x2, y2], dim=-1),
+        torch.stack([y2, -x2, w2, z2], dim=-1),
+        torch.stack([-x2, -y2, -z2, w2], dim=-1),
+    ], dim=-2)
 
 def quaternion_multiply_np(q1, q2):
     """Multiply two quaternions."""

@@ -70,7 +70,7 @@ def BA(iter, poses, velocities, imu_meas, landmarks, landmarks_xyz, ii, time_idx
 	# ipdb.set_trace()
 	Jf_x = Jf_x.reshape((bsz, -1, n*dim))
 	JfTwJf = torch.bmm((Jf*Sigma).transpose(1,2), Jf)
-	Hq = Sigma*torch.block_diag(*Hq[0].unbind(dim=0)).unsqueeze(0)*0
+	# Hq = Sigma*torch.block_diag(*Hq[0].unbind(dim=0)).unsqueeze(0)*0
 
 	# J_full = torch.cat([Jg, Jf], axis=1)
 	# wts = torch.cat([V, Sigma], 1).unsqueeze(-1)
@@ -92,8 +92,8 @@ def BA(iter, poses, velocities, imu_meas, landmarks, landmarks_xyz, ii, time_idx
 	init_residual = torch.cat([r_obs.reshape(-1)*0, r_pred.reshape(-1)*np.sqrt(Sigma)], dim = 0).norm()
 	while True:
 
-		JTwJ =  torch.eye(n*dim)[None]*lamda+JgTwJg + JfTwJf#*100#.01 #+ torch.eye(n*dim)[None]*1e-5+#.1 # 
-		JTwJ.view(bsz, n, dim, n, dim)[:, :, 3:, :, 3:] += Hq.view(bsz, n, 3, n, 3)
+		JTwJ =  torch.eye(n*dim)[None]*lamda+JgTwJg + JfTwJf + Hq#*100#.01 #+ torch.eye(n*dim)[None]*1e-5+#.1 # 
+		# JTwJ.view(bsz, n, dim, n, dim)[:, :, 3:, :, 3:] += Hq.view(bsz, n, 3, n, 3)
 		try:
 			dpose = torch.linalg.solve(JTwJ, JTr).reshape(bsz, n, dim)
 		
