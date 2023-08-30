@@ -198,7 +198,7 @@ def read_detections(sample_dets=False):
         orbit = json.load(infile)
     orbit = np.array(orbit)
     # ipdb.set_trace()
-    orbit[:,0], orbit[:,1], orbit[:,2] = ecef_to_eci(orbit[:,0], orbit[:,1], orbit[:,2], times = np.arange(orbit.shape[0]))
+    orbit[:,0], orbit[:,1], orbit[:,2] = ecef_to_eci(orbit[:,0]/1000, orbit[:,1]/1000, orbit[:,2]/1000, times = np.arange(orbit.shape[0]))
 
     intrinsics = np.genfromtxt("landmarks/intrinsics.csv", delimiter=',')[0] #  might have to specify manually
     return orbit, landmarks_dict, intrinsics, time_idx, ii
