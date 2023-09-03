@@ -139,7 +139,11 @@ def read_data(sample_dets=False):
     for i in range(len(landmarks)):#10, 25):#
         # if i > 13 and i <21:
         #     continue
-        if i <9 or i > 30:
+        # if (i>4 and i <10):
+        #     continue
+        # if (not i == 9) and (not i == 30):
+        #     continue
+        if i <10:# or i>24:
             continue
         num_points = 0
         # while  filler_idx*1000 < times[landmarks[i,0]]:
@@ -208,12 +212,12 @@ def remove_elems(mask, gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_qua
     import copy
     ii_new = copy.deepcopy(ii[mask][:-5])
     mask_poses = np.unique(ii_old)
-    for i in range(ii_old.max()):
-        if (i==ii_old).sum() > 2:
-            mask_poses.append(i)
-        else:
-            mask1 = (ii_old != i)
-            mask = mask*mask1
+    # for i in range(ii_old.max()):
+    #     if (i==ii_old).sum() > 2:
+    #         mask_poses.append(i)
+    #     else:
+    #         mask1 = (ii_old != i)
+    #         mask = mask*mask1
             
     for i in range(ii_old.max()):
         if i not in ii_old:
@@ -229,13 +233,36 @@ def remove_elems(mask, gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_qua
     # gt_quat_eci_full = gt_quat_eci_full[mask_poses]
     # gt_acceleration = gt_acceleration[mask_poses]
     time_idx = time_idx[mask_poses]
-    return gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_quat_eci_full, landmarks_xyz, landmarks_uv, intrinsics, gt_acceleration, ii_new, time_idx
+    return gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_quat_eci_full, landmarks_xyz, landmarks_uv, intrinsics, gt_acceleration, ii_new, time_idx, mask
         
-    
+def add_proxy_landmarks(landmarks_xyz, landmarks_uv, landmark_uv_proj, ii, intrinsics, poses_gt_eci, confidences):
+    idx = np.unique(ii)
+    N = 8
+    for i in idx:
+        mask = (ii == i)
+        if mask.sum() > 4:
+            continue
+        noise = torch.randn((N, 2))*20
+        offset = torch.randn((N, 3))*50
+        # ipdb.set_trace()
+        landmarks_xyz = torch.cat([landmarks_xyz, landmarks_xyz[mask][:1] + offset], dim=0)
+        ii = np.concatenate([ii]+ [ii[mask][:1]]*N, axis=0)
+        # ipdb.set_trace()
+        proj = landmark_project(poses_gt_eci.unsqueeze(0), (landmarks_xyz[-N:])[None], intrinsics.unsqueeze(0), ii[-N:], jacobian=False)
+        landmarks_uv = torch.cat([landmarks_uv,proj[0]+noise], dim=0)
+        landmark_uv_proj = torch.cat([landmark_uv_proj, proj], dim=1)
+        confidences = torch.cat([confidences, torch.ones(N)*0.75], dim=0)
+    # ipdb.set_trace()
+    return landmarks_xyz, landmarks_uv, landmark_uv_proj, ii, confidences
+
+def seeding(seed):
+    torch.manual_seed(seed)
+    np.random.seed(seed)    
 
 if __name__ == "__main__":
-
+# def attitude_debugging():
     ### Specify hyperparameters
+    seeding(0)
     h = 1 # Frequency = 1 Hz
     dt = 1/h
     V = 1e-3
@@ -258,18 +285,20 @@ if __name__ == "__main__":
     landmark_uv_proj = landmark_project(poses_gt_eci.unsqueeze(0), landmarks_xyz.unsqueeze(0), intrinsics.unsqueeze(0), ii, jacobian=False)
     mask = ((landmark_uv_proj[:, :, 0] > 0)*(landmark_uv_proj[:, :, 1] > 0)*(landmark_uv_proj[:, :, 0] < 2600)*(landmark_uv_proj[:, :, 1] < 2000)*((landmark_uv_proj - landmarks_uv[None]).norm(dim=-1)<1000) )[0]
     print("mean landmark difference : ", ((landmark_uv_proj[0,:] - landmarks_uv)*mask.double().unsqueeze(-1)).abs().mean(dim=0))
-    print(torch.cat([(landmark_uv_proj[0,:] - landmarks_uv), torch.tensor(landmarks_dict["confidence"])[:,None], landmark_uv_proj[0]], dim=-1)[:20])
+    print(torch.cat([(landmark_uv_proj[0,:] - landmarks_uv), torch.tensor(landmarks_dict["confidence"])[:,None], landmark_uv_proj[0]], dim=-1)[mask][:20])
+    ipdb.set_trace()
     # mask[17] = False
     # gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_quat_eci_full, landmarks_xyz, landmarks_uv, intrinsics, gt_acceleration, ii, time_idx, mask = remove_elems(mask, gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_quat_eci_full, landmarks_xyz, landmarks_uv, intrinsics, gt_acceleration, ii, time_idx)
     # ipdb.set_trace()
-    ii = ii[mask]#[:-5]
-    landmarks_xyz, landmarks_uv, landmark_uv_proj = landmarks_xyz[mask], landmarks_uv[mask], landmark_uv_proj[:, mask]
-    # landmarks_xyz, landmarks_uv, landmark_uv_proj = landmarks_xyz[mask][:-5], landmarks_uv[mask][:-5], landmark_uv_proj[:, mask][:,:-5]#, ii[mask][:-5]
-    confidences = torch.tensor(landmarks_dict["confidence"])[mask].double()#[:-5]
+    ii = ii[mask][:-5]
+    # landmarks_xyz, landmarks_uv, landmark_uv_proj = landmarks_xyz[mask], landmarks_uv[mask], landmark_uv_proj[:, mask]
+    landmarks_xyz, landmarks_uv, landmark_uv_proj = landmarks_xyz[mask][:-5], landmarks_uv[mask][:-5], landmark_uv_proj[:, mask][:,:-5]#, ii[mask][:-5]
+    confidences = torch.tensor(landmarks_dict["confidence"])[mask].double()[:-5]
+    # landmarks_xyz, landmarks_uv, landmark_uv_proj, ii, confidences = add_proxy_landmarks(landmarks_xyz, landmarks_uv, landmark_uv_proj, ii, intrinsics, poses_gt_eci, confidences)
     print("mean landmark difference : ", ((landmark_uv_proj[0,:] - landmarks_uv)).abs().mean(dim=0))
     # print(torch.cat([(landmark_uv_proj[0,:] - landmarks_uv), torch.tensor(landmarks_dict["confidence"])[mask][:,None], landmark_uv_proj[0]], dim=-1)[:100])
     ipdb.set_trace()
-    noise_level = 0.0#5
+    noise_level = 1.0
     landmarks_uv += (landmark_uv_proj[0, :] - landmarks_uv)*(1-noise_level)
         
     ### Initial guess for poses, velocities
@@ -290,10 +319,10 @@ if __name__ == "__main__":
         omegas[:, i-1, :time_idx[i]-time_idx[i-1], :] = gt_omega[time_idx[i-1]:time_idx[i], :].unsqueeze(0).double()
         accelerations[:, i-1, :time_idx[i]-time_idx[i-1], :] = gt_acceleration[time_idx[i-1]:time_idx[i], :].unsqueeze(0).double()
     imu_meas = torch.cat((omegas, accelerations), dim=-1)   # for now, assume that the IMU gives us the accurate angular velocity and acceleration
-    position_offset = torch.randn((T, 3))*0#*100
+    position_offset = torch.randn((T, 3))*100
     # position_offset[0, :] = 0
     orientation_offset = torch.randn([T, 3])*0.2
-    orientation_offset[0, :] = 0
+    # orientation_offset[0, :] = 0
     position = poses_gt_eci.double()[:, :3] + position_offset
     orientation = quaternion_exp(quaternion_log(poses_gt_eci.double()[:, 3:]) + orientation_offset)
     poses = torch.cat([position, orientation], dim=1).unsqueeze(0)
@@ -307,7 +336,165 @@ if __name__ == "__main__":
 
     for i in range(num_iters):
         poses, velocities, lamda_init = BA(i, poses, velocities, imu_meas, landmarks_uv, landmarks_xyz, ii, time_idx, intrinsics, confidences, Sigma, V, lamda_init, poses_gt_eci)
+        # print(poses_gt_eci[:,3:] - poses[0,:,3:])
+        # print((poses_gt_eci[:,3:]*poses[0,:,3:]).sum(dim=-1))
+        predq = propagate_rotation_dynamics(poses[:, :, 3:], imu_meas[..., :3].double(), time_idx, 1, False)[0]
+        print((predq[0,:-1,:]*poses[0,1:,3:]).sum(dim=-1))
         if i%5==0:
             ipdb.set_trace()
 
+# if __name__ == "__main__":
+def attitude_debugging():
+    ### Specify hyperparameters
+    h = 1 # Frequency = 1 Hz
+    dt = 1/h
+    V = 1e-3
+    Sigma = 1e-3
+    num_iters = 100
+    torch.set_printoptions(precision=4, sci_mode=False)
+    seeding(0)
+
+    ### Read data 
+    sample_dets = False
+    orbit, landmarks_dict, intrinsics, time_idx, ii = read_data(sample_dets)
+    # orbit, landmarks_dict, intrinsics, time_idx, ii = read_detections(sample_dets)
+    gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_quat_eci_full, landmarks_xyz, landmarks_uv, intrinsics, gt_acceleration = process_ground_truths(orbit, landmarks_dict, intrinsics, dt, time_idx)
+
+    ### Obtain acceleration from orbital dynamics and angular velocity from IMU
+    # dyn_params = get_all_r_sun_moon_PN()
+    # x = torch.cat([gt_pos_eci, gt_vel_eci], dim=1)
+    # t, params = dyn_params[-1], dyn_params[:-1]
+    # gt_acceleration = RK4_orbit_dynamics_avg(x, h) #RK4_avg(x, t, h, params)
+    # gt_acceleration = compute_velocity_from_pos(gt_vel_eci, dt)
+    landmark_uv_proj = landmark_project(poses_gt_eci.unsqueeze(0), landmarks_xyz.unsqueeze(0), intrinsics.unsqueeze(0), ii, jacobian=False)
+    mask = ((landmark_uv_proj[:, :, 0] > 0)*(landmark_uv_proj[:, :, 1] > 0)*(landmark_uv_proj[:, :, 0] < 2600)*(landmark_uv_proj[:, :, 1] < 2000)*((landmark_uv_proj - landmarks_uv[None]).norm(dim=-1)<1000) )[0]*0 + 1
+    print("mean landmark difference : ", ((landmark_uv_proj[0,:] - landmarks_uv)*mask.double().unsqueeze(-1)).abs().mean(dim=0))
+    print(torch.cat([(landmark_uv_proj[0,:] - landmarks_uv), torch.tensor(landmarks_dict["confidence"])[:,None], landmark_uv_proj[0]], dim=-1)[:20])
+    ii = ii[mask]#[:-5]
+    landmarks_xyz, landmarks_uv, landmark_uv_proj = landmarks_xyz[mask], landmarks_uv[mask], landmark_uv_proj[:, mask]
+    confidences = torch.tensor(landmarks_dict["confidence"])[mask].double()#[:-5]
+    print("mean landmark difference : ", ((landmark_uv_proj[0,:] - landmarks_uv)).abs().mean(dim=0))
+    ipdb.set_trace()
+    noise_level = 0.0#5
+    landmarks_uv += (landmark_uv_proj[0, :] - landmarks_uv)*(1-noise_level)
+        
+    T = len(gt_pos_eci)
+    N  = max(time_idx[1:] - time_idx[:-1])
+    gt_omega = compute_omega_from_quat(gt_quat_eci_full, dt)#
+    velocities = torch.zeros((1, T, N, 3))
+    omegas = torch.zeros((1, T, N, 3))
+    accelerations = torch.zeros((1, T, N, 3))
+    # ipdb.set_trace()
+    # velocities[:, :, 0, :] = gt_vel_eci.unsqueeze(0).double()
+    # omegas[:, :, 0, :] = gt_omega.unsqueeze(0).double()
+    # accelerations[:, :, 0, :] = gt_acceleration.unsqueeze(0).double()
+    for i in range(1, T):
+        velocities[:, i-1, :time_idx[i]-time_idx[i-1], :] = gt_vel_eci[time_idx[i-1]:time_idx[i], :].unsqueeze(0).double()
+        omegas[:, i-1, :time_idx[i]-time_idx[i-1], :] = gt_omega[time_idx[i-1]:time_idx[i], :].unsqueeze(0).double()
+        accelerations[:, i-1, :time_idx[i]-time_idx[i-1], :] = gt_acceleration[time_idx[i-1]:time_idx[i], :].unsqueeze(0).double()
+    imu_meas = torch.cat((omegas, accelerations), dim=-1)   # for now, assume that the IMU gives us the accurate angular velocity and acceleration
+    position_offset = torch.randn((T, 3))*0#*100
+    # position_offset[0, :] = 0
+    orientation_offset = torch.randn([T, 3])*0.2
+    orientation_offset[0, :] = 0
+    position = poses_gt_eci.double()[:, :3] + position_offset
+    orientation =quaternion_exp(quaternion_log(poses_gt_eci.double()[:, 3:]) + orientation_offset)
+    poses = torch.cat([position, orientation], dim=1).unsqueeze(0)
+    # poses = poses_gt_eci.unsqueeze(0).double() + offset# torch.zeros(1, T, 7)
+    # velocities = gt_vel_eci.unsqueeze(0).double() # torch.zeros(1, T, 3)
+    # imu_meas = imu_meas.unsqueeze(0)
+    landmarks_uv = landmarks_uv.unsqueeze(0)
+    landmarks_xyz = landmarks_xyz.unsqueeze(0)
+    intrinsics = intrinsics.unsqueeze(0)
+    lamda_init = 1e-4
+
+    for i in range(num_iters):
+        # poses, velocities, lamda_init = BA(i, poses, velocities, imu_meas, landmarks_uv, landmarks_xyz, ii, time_idx, intrinsics, confidences, Sigma, V, lamda_init, poses_gt_eci)
+        landmarks = landmarks_uv
+        iter = i
+        poses = poses.double()
+        # ipdb.set_trace()
+        v = velocities.double()
+        imu_meas = imu_meas.double()
+        landmarks = landmarks.double()
+        landmarks_xyz = landmarks_xyz.double()
+        intrinsics = intrinsics.double()
+        # time_idx = time_idx.double()
+        quat_coeff = 100 #+ min(iter*10, 900)
+        dim = 3
+
+        bsz = poses.shape[0]
+        r_pred, Hq, qgrad = predict_attitude(poses, velocities, imu_meas, time_idx, quat_coeff, jacobian=True) 
+        
+        n = poses.shape[1]    
+        JTr = - qgrad.reshape(bsz, n, dim).reshape(bsz, -1)
+        # ipdb.set_trace()
+        lamda = lamda_init
+        init_residual = torch.cat([r_pred.reshape(-1)*np.sqrt(Sigma)], dim = 0).abs().mean()
+        # Hq6 = torch.cat([torch.cat([torch.zeros(n*dim, n*dim).reshape(1, n, dim, n, dim), Hq.reshape(bsz, n, dim, n, dim)*0], dim=-1),
+        #                  torch.cat([Hq.new_zeros(bsz, n, dim, n, 3), Hq.reshape(bsz, n, dim, n, dim)], dim=-1)], dim=2).reshape(bsz, n*dim*2, n*dim*2)
+        # grad6 = -torch.cat([torch.zeros(bsz, n, dim), qgrad], dim=-1).reshape(bsz, -1)
+        # JTwJ6 =  torch.eye(n*dim*2)[None]*lamda + Hq6
+        # dpose6 = torch.linalg.solve(JTwJ6, grad6).reshape(bsz, n, dim*2) 
+        # JTwJ =  torch.eye(n*dim)[None]*lamda + Hq
+        # dpose = torch.linalg.solve(JTwJ, JTr).reshape(bsz, n, dim)
+        # ipdb.set_trace()
+        while True:
+
+            JTwJ =  torch.eye(n*dim)[None]*lamda + Hq#*100#.01 #+ torch.eye(n*dim)[None]*1e-5+#.1 # 
+            # JTwJ.view(bsz, n, dim, n, dim)[:, :, 3:, :, 3:] += Hq.view(bsz, n, 3, n, 3)
+            try:
+                # ipdb.set_trace()
+                dpose = torch.linalg.solve(JTwJ, JTr).reshape(bsz, n, dim)
+            
+                # ipdb.set_trace()
+                position = poses[:,:,:3] #+ dpose[:,:,:3]
+                rotation = quaternion_multiply(poses[:,:,3:], quaternion_exp(dpose))#[:,:,3:]))
+                rotation = rotation / torch.norm(rotation, dim=2, keepdim=True)
+                rotation[:, 0] = poses[:, 0, 3:].clone()
+                poses_new = torch.cat([position, rotation], 2)
+                # landmark_est = landmark_project(poses_new, landmarks_xyz, intrinsics, ii, jacobian=False)
+                r_pred1 = predict_attitude(poses_new, velocities, imu_meas, time_idx, quat_coeff, jacobian=False) 
+                r_pred1 = r_pred1[:, :,  :dim].reshape(bsz, -1) * np.sqrt(Sigma)#*0.01
+                residual = r_pred1
+                print("lamda: ", lamda, r_pred1.abs().mean())
+            except:
+                lamda = lamda*10
+                if lamda > 1e4:
+                    print("lamda too large")
+                    ipdb.set_trace()
+                
+                continue
+
+            lamda = lamda*10
+            if (residual.abs().mean()) < init_residual:
+                break
+            if lamda > 1e4:
+                print("lamda too large")
+                break
+            
+        lamda_init = max(min(1e-1, lamda*0.01), 10)
+
+        ## backtracking line search
+        alpha = 1
+        init_residual = (r_pred.reshape(-1)*np.sqrt(Sigma)).norm()
+        # init_residual = (r_obs.abs()).sum() + (r_pred.abs()).sum()*np.sqrt(Sigma)
+        print("alpha: ", alpha, r_pred.abs().mean()* np.sqrt(Sigma))
+        print("final quat: ", (poses_new[0,:, 3:]-poses_gt_eci[:, 3:]).abs().mean(dim=0), (1 - torch.abs((poses_new[0,:, 3:] * poses_gt_eci[:, 3:]).sum(dim=-1))).mean())
+        # print("final: ", (poses_new2[0,:3, 3:]-poses_gt_eci[:3, 3:]).abs().mean(dim=0))
+        # print("final: ", (poses_new3[0,:3, 3:]-poses_gt_eci[:3, 3:]).abs().mean(dim=0))
+        print("init quat: ", (poses[0,:, 3:] - poses_gt_eci[:, 3:]).abs().mean(dim=0), (1 - torch.abs((poses[0,:, 3:] * poses_gt_eci[:, 3:]).sum(dim=-1))).mean())
+        print("final pos: ", (poses_new[0,:, :3]-poses_gt_eci[:, :3]).abs().mean(dim=0))
+        print("init pos: ", (poses[0,:, :3] - poses_gt_eci[:, :3]).abs().mean(dim=0))
+        print("r_pred :", r_pred[0,:].abs().mean(dim=0))
+        # ipdb.set_trace()
+        poses = poses_new
+        # , velocities, lamda_init
+
+        # print((poses_gt_eci[:,3:]*poses[0,:,3:]).sum(dim=-1))
+        predq = propagate_rotation_dynamics(poses[:, :, 3:], imu_meas[..., :3].double(), time_idx, 1, False)[0]
+        print((predq[0,:-1,:]*poses[0,1:,3:]).sum(dim=-1))
+        if i%5==0:
+
+            ipdb.set_trace()
 
