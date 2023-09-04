@@ -28,8 +28,8 @@ def BA(iter, poses, velocities, imu_meas, landmarks, landmarks_xyz, ii, time_idx
 	# print(r_pred[:, :, -1].abs().mean(), (pose_pred[0,:-1,3:]*poses[0,1:,3:]).sum(dim=-1).mean())
 	r_obs = (landmarks - landmark_est)
 	# ipdb.set_trace()	
-	alpha = max(1 - (2*(iter/5) - 1), -4)
-	c_obs = r_obs.abs().median()/2#1000
+	alpha = 2#max(1 - (2*(iter/5) - 1), -4)
+	c_obs = r_obs.abs().median()#1000
 	wts_obs = (((((r_obs/c_obs)**2)/abs(alpha-2) + 1)**(alpha/2 - 1)) / ((c_obs)**2)).mean(dim=-1).unsqueeze(-1).unsqueeze(-1)[0]
 	# ipdb.set_trace()
 	wts_obs = (wts_obs/wts_obs.max())*confidences.unsqueeze(-1).unsqueeze(-1)#*0 + 1

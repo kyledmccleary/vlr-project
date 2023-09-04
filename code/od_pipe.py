@@ -97,8 +97,8 @@ def process_ground_truths(orbit, landmarks_dict, intrinsics, dt, time_idx):
     gt_vel_eci = compute_velocity_from_pos(orbit[:,:3], dt) # orbit[:,3:6]
     # gt_vel_eci = compute_velocity_from_pos(gt_pos_eci, dt)
     # gt_quat_eci_full = np.concatenate([orbit[:,7:10], orbit[:, 6:7]], axis=-1)#convert_pos_to_quaternion(gt_pos_eci)
-    zc, yc, xc = convert_quaternion_to_xyz_orientation(orbit[:,6:10], np.arange(len(orbit)))
-    # zc, yc, xc = orbit[:, 3:6], orbit[:, 6:9], orbit[:, 9:12]
+    # zc, yc, xc = convert_quaternion_to_xyz_orientation(orbit[:,6:10], np.arange(len(orbit)))
+    zc, yc, xc = orbit[:, 3:6], orbit[:, 6:9], orbit[:, 9:12]
     gt_quat_eci_full = convert_xyz_orientation_to_quat(xc, yc, zc, np.arange(len(orbit)))
     # ipdb.set_trace()
     gt_quat_eci = gt_quat_eci_full[time_idx, :]
@@ -202,7 +202,7 @@ def read_detections(sample_dets=False):
         orbit = json.load(infile)
     orbit = np.array(orbit)
     # ipdb.set_trace()
-    orbit[:,0], orbit[:,1], orbit[:,2] = ecef_to_eci(orbit[:,0], orbit[:,1], orbit[:,2], times = np.arange(orbit.shape[0]))
+    orbit[:,0], orbit[:,1], orbit[:,2] = ecef_to_eci(orbit[:,0]/1000, orbit[:,1]/1000, orbit[:,2]/1000, times = np.arange(orbit.shape[0]))
 
     intrinsics = np.genfromtxt("landmarks/intrinsics.csv", delimiter=',')[0] #  might have to specify manually
     return orbit, landmarks_dict, intrinsics, time_idx, ii
@@ -272,8 +272,8 @@ if __name__ == "__main__":
 
     ### Read data 
     sample_dets = False
-    orbit, landmarks_dict, intrinsics, time_idx, ii = read_data(sample_dets)
-    # orbit, landmarks_dict, intrinsics, time_idx, ii = read_detections(sample_dets)
+    # orbit, landmarks_dict, intrinsics, time_idx, ii = read_data(sample_dets)
+    orbit, landmarks_dict, intrinsics, time_idx, ii = read_detections(sample_dets)
     gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_quat_eci_full, landmarks_xyz, landmarks_uv, intrinsics, gt_acceleration = process_ground_truths(orbit, landmarks_dict, intrinsics, dt, time_idx)
 
     ### Obtain acceleration from orbital dynamics and angular velocity from IMU
@@ -283,17 +283,17 @@ if __name__ == "__main__":
     # gt_acceleration = RK4_orbit_dynamics_avg(x, h) #RK4_avg(x, t, h, params)
     # gt_acceleration = compute_velocity_from_pos(gt_vel_eci, dt)
     landmark_uv_proj = landmark_project(poses_gt_eci.unsqueeze(0), landmarks_xyz.unsqueeze(0), intrinsics.unsqueeze(0), ii, jacobian=False)
-    mask = ((landmark_uv_proj[:, :, 0] > 0)*(landmark_uv_proj[:, :, 1] > 0)*(landmark_uv_proj[:, :, 0] < 2600)*(landmark_uv_proj[:, :, 1] < 2000)*((landmark_uv_proj - landmarks_uv[None]).norm(dim=-1)<1000) )[0]
+    mask = ((landmark_uv_proj[:, :, 0] > 0)*(landmark_uv_proj[:, :, 1] > 0)*(landmark_uv_proj[:, :, 0] < 2600)*(landmark_uv_proj[:, :, 1] < 2000)*((landmark_uv_proj - landmarks_uv[None]).norm(dim=-1)<1000)*(torch.tensor(landmarks_dict["confidence"])>0.8) )[0]
     print("mean landmark difference : ", ((landmark_uv_proj[0,:] - landmarks_uv)*mask.double().unsqueeze(-1)).abs().mean(dim=0))
     print(torch.cat([(landmark_uv_proj[0,:] - landmarks_uv), torch.tensor(landmarks_dict["confidence"])[:,None], landmark_uv_proj[0]], dim=-1)[mask][:20])
-    ipdb.set_trace()
+    # ipdb.set_trace()
     # mask[17] = False
     # gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_quat_eci_full, landmarks_xyz, landmarks_uv, intrinsics, gt_acceleration, ii, time_idx, mask = remove_elems(mask, gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_quat_eci_full, landmarks_xyz, landmarks_uv, intrinsics, gt_acceleration, ii, time_idx)
     # ipdb.set_trace()
-    ii = ii[mask][:-5]
-    # landmarks_xyz, landmarks_uv, landmark_uv_proj = landmarks_xyz[mask], landmarks_uv[mask], landmark_uv_proj[:, mask]
-    landmarks_xyz, landmarks_uv, landmark_uv_proj = landmarks_xyz[mask][:-5], landmarks_uv[mask][:-5], landmark_uv_proj[:, mask][:,:-5]#, ii[mask][:-5]
-    confidences = torch.tensor(landmarks_dict["confidence"])[mask].double()[:-5]
+    ii = ii[mask]#[:-5]
+    landmarks_xyz, landmarks_uv, landmark_uv_proj = landmarks_xyz[mask], landmarks_uv[mask], landmark_uv_proj[:, mask]
+    # landmarks_xyz, landmarks_uv, landmark_uv_proj = landmarks_xyz[mask][:-5], landmarks_uv[mask][:-5], landmark_uv_proj[:, mask][:,:-5]#, ii[mask][:-5]
+    confidences = torch.tensor(landmarks_dict["confidence"])[mask].double()#[:-5]
     # landmarks_xyz, landmarks_uv, landmark_uv_proj, ii, confidences = add_proxy_landmarks(landmarks_xyz, landmarks_uv, landmark_uv_proj, ii, intrinsics, poses_gt_eci, confidences)
     print("mean landmark difference : ", ((landmark_uv_proj[0,:] - landmarks_uv)).abs().mean(dim=0))
     # print(torch.cat([(landmark_uv_proj[0,:] - landmarks_uv), torch.tensor(landmarks_dict["confidence"])[mask][:,None], landmark_uv_proj[0]], dim=-1)[:100])
@@ -340,8 +340,8 @@ if __name__ == "__main__":
         # print((poses_gt_eci[:,3:]*poses[0,:,3:]).sum(dim=-1))
         predq = propagate_rotation_dynamics(poses[:, :, 3:], imu_meas[..., :3].double(), time_idx, 1, False)[0]
         print((predq[0,:-1,:]*poses[0,1:,3:]).sum(dim=-1))
-        if i%5==0:
-            ipdb.set_trace()
+        # if i%5==0:
+        #     ipdb.set_trace()
 
 # if __name__ == "__main__":
 def attitude_debugging():
