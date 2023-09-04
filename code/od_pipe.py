@@ -282,7 +282,8 @@ if __name__ == "__main__":
     # t, params = dyn_params[-1], dyn_params[:-1]
     # gt_acceleration = RK4_orbit_dynamics_avg(x, h) #RK4_avg(x, t, h, params)
     # gt_acceleration = compute_velocity_from_pos(gt_vel_eci, dt)
-    landmark_uv_proj = landmark_project(poses_gt_eci.unsqueeze(0), landmarks_xyz.unsqueeze(0), intrinsics.unsqueeze(0), ii, jacobian=False)
+    states_gt_eci = torch.cat([poses_gt_eci, gt_vel_eci[time_idx]], dim=-1)
+    landmark_uv_proj = landmark_project(states_gt_eci.unsqueeze(0), landmarks_xyz.unsqueeze(0), intrinsics.unsqueeze(0), ii, jacobian=False)
     mask = ((landmark_uv_proj[:, :, 0] > 0)*(landmark_uv_proj[:, :, 1] > 0)*(landmark_uv_proj[:, :, 0] < 2600)*(landmark_uv_proj[:, :, 1] < 2000)*((landmark_uv_proj - landmarks_uv[None]).norm(dim=-1)<1000)*(torch.tensor(landmarks_dict["confidence"])>0.8) )[0]
     print("mean landmark difference : ", ((landmark_uv_proj[0,:] - landmarks_uv)*mask.double().unsqueeze(-1)).abs().mean(dim=0))
     print(torch.cat([(landmark_uv_proj[0,:] - landmarks_uv), torch.tensor(landmarks_dict["confidence"])[:,None], landmark_uv_proj[0]], dim=-1)[mask][:20])
@@ -298,7 +299,7 @@ if __name__ == "__main__":
     print("mean landmark difference : ", ((landmark_uv_proj[0,:] - landmarks_uv)).abs().mean(dim=0))
     # print(torch.cat([(landmark_uv_proj[0,:] - landmarks_uv), torch.tensor(landmarks_dict["confidence"])[mask][:,None], landmark_uv_proj[0]], dim=-1)[:100])
     ipdb.set_trace()
-    noise_level = 1.0
+    noise_level = 0.0
     landmarks_uv += (landmark_uv_proj[0, :] - landmarks_uv)*(1-noise_level)
         
     ### Initial guess for poses, velocities
@@ -307,7 +308,9 @@ if __name__ == "__main__":
     T = len(gt_pos_eci)
     N  = max(time_idx[1:] - time_idx[:-1])
     gt_omega = compute_omega_from_quat(gt_quat_eci_full, dt)#
-    velocities = torch.zeros((1, T, N, 3))
+    # velocities = torch.zeros((1, T, N, 3))
+    velocities = gt_vel_eci[time_idx].unsqueeze(0).double() # torch.zeros(1, T, 3)
+    ipdb.set_trace()
     omegas = torch.zeros((1, T, N, 3))
     accelerations = torch.zeros((1, T, N, 3))
     # ipdb.set_trace()
@@ -315,17 +318,20 @@ if __name__ == "__main__":
     # omegas[:, :, 0, :] = gt_omega.unsqueeze(0).double()
     # accelerations[:, :, 0, :] = gt_acceleration.unsqueeze(0).double()
     for i in range(1, T):
-        velocities[:, i-1, :time_idx[i]-time_idx[i-1], :] = gt_vel_eci[time_idx[i-1]:time_idx[i], :].unsqueeze(0).double()
+        # velocities[:, i-1, :time_idx[i]-time_idx[i-1], :] = gt_vel_eci[time_idx[i-1]:time_idx[i], :].unsqueeze(0).double()
         omegas[:, i-1, :time_idx[i]-time_idx[i-1], :] = gt_omega[time_idx[i-1]:time_idx[i], :].unsqueeze(0).double()
         accelerations[:, i-1, :time_idx[i]-time_idx[i-1], :] = gt_acceleration[time_idx[i-1]:time_idx[i], :].unsqueeze(0).double()
     imu_meas = torch.cat((omegas, accelerations), dim=-1)   # for now, assume that the IMU gives us the accurate angular velocity and acceleration
-    position_offset = torch.randn((T, 3))*100
+    position_offset = torch.randn((T, 3))*0#*100
     # position_offset[0, :] = 0
-    orientation_offset = torch.randn([T, 3])*0.2
+    orientation_offset = torch.randn([T, 3])*0#.2
     # orientation_offset[0, :] = 0
+    velocity_offset = torch.randn([T, 3])*velocities.abs().mean()*0#.1
     position = poses_gt_eci.double()[:, :3] + position_offset
     orientation = quaternion_exp(quaternion_log(poses_gt_eci.double()[:, 3:]) + orientation_offset)
+    vels = velocities.double() + velocity_offset.unsqueeze(0)
     poses = torch.cat([position, orientation], dim=1).unsqueeze(0)
+    states = torch.cat([poses, vels], dim=-1)
     # poses = poses_gt_eci.unsqueeze(0).double() + offset# torch.zeros(1, T, 7)
     # velocities = gt_vel_eci.unsqueeze(0).double() # torch.zeros(1, T, 3)
     # imu_meas = imu_meas.unsqueeze(0)
@@ -333,13 +339,15 @@ if __name__ == "__main__":
     landmarks_xyz = landmarks_xyz.unsqueeze(0)
     intrinsics = intrinsics.unsqueeze(0)
     lamda_init = 1e-4
+    # pos_pred, vel_pred = propagate_orbit_dynamics(states[:, :, :3], states[:, :, 7:], time_idx, 1)
+    # ipdb.set_trace()
 
     for i in range(num_iters):
-        poses, velocities, lamda_init = BA(i, poses, velocities, imu_meas, landmarks_uv, landmarks_xyz, ii, time_idx, intrinsics, confidences, Sigma, V, lamda_init, poses_gt_eci)
+        states, velocities, lamda_init = BA(i, states, velocities, imu_meas, landmarks_uv, landmarks_xyz, ii, time_idx, intrinsics, confidences, Sigma, V, lamda_init, poses_gt_eci)
         # print(poses_gt_eci[:,3:] - poses[0,:,3:])
         # print((poses_gt_eci[:,3:]*poses[0,:,3:]).sum(dim=-1))
-        predq = propagate_rotation_dynamics(poses[:, :, 3:], imu_meas[..., :3].double(), time_idx, 1, False)[0]
-        print((predq[0,:-1,:]*poses[0,1:,3:]).sum(dim=-1))
+        predq = propagate_rotation_dynamics(states[:, :, 3:7], imu_meas[..., :3].double(), time_idx, 1, False)[0]
+        print((predq[0,:-1,:]*states[0,1:,3:7]).sum(dim=-1))
         # if i%5==0:
         #     ipdb.set_trace()
 

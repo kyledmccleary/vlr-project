@@ -35,7 +35,7 @@ def landmark_project(poses, landmarks_xyz, intrinsics, ii, jacobian=True):
     # Jg = torch.zeros(landmarks_xyz.shape[0], landmarks_xyz.shape[1], 3*poses.shape[1])
     poses_ii = poses[:, ii, :]
     bsz = poses_ii.shape[0]
-    poses_ii = poses_ii.reshape(-1, 7).requires_grad_(True)
+    poses_ii = poses_ii.reshape(-1, 10)[:, :7].requires_grad_(True)
     def project_ii(poses_ii):
         poses_ii = poses_ii.reshape(bsz, -1, 7)
         X1 = apply_inverse_pose_transformation(landmarks_xyz, poses_ii[:, :, 3:], poses_ii[:, :, :3])
@@ -56,22 +56,24 @@ def landmark_project(poses, landmarks_xyz, intrinsics, ii, jacobian=True):
         Jg = torch.autograd.functional.jacobian(project_ii_sum, poses_ii, vectorize=True).transpose(0,1)
         # ipdb.set_trace()
         Jg = torch.cat([Jg[:,:,:3], torch.bmm(Jg[:,:,3:], Gq)], dim=2).reshape(-1, 2, 6)
+        Jg = torch.cat([Jg, torch.zeros_like(Jg)[...,:3]], dim=-1)
         return landmark_est, Jg
     return landmark_est
 
 def propagate_orbit_dynamics(position, velocities, times, dt):
-    time_diffs = times[1:] - times[:-1]
+    time_diffs = torch.tensor(times[1:] - times[:-1])
     time_diffs = torch.cat([time_diffs, torch.ones_like(time_diffs[-1:])], dim=0)
     max_time_diff = time_diffs.max()
     x = torch.cat([position, velocities], dim=-1)
     x_pred = []
+    x_shape = x.shape
     for i in range(max_time_diff):
         x = RK4(x, i, dt)
-        x_pred.append(x[:, :, :3])
+        x_pred.append(x)#[:, :, :3])
     x_pred = torch.stack(x_pred, dim=-2)
-    x_pred = x_pred[:, torch.arange(len(time_diffs)), time_diffs-1]
-    pos_pred = x_pred[:, :, :3]
-    vel_pred = x_pred[:, :, 3:]
+    x_pred = x_pred[..., torch.arange(len(time_diffs)), time_diffs-1, :]
+    pos_pred = x_pred[..., :3]
+    vel_pred = x_pred[..., 3:]
     return pos_pred, vel_pred
 
 def propagate_rotation_dynamics(quaternion, omegas, times, dt, jac=False):
@@ -192,7 +194,7 @@ def predict_GN(poses, velocities, imu_meas, times, quat_coeff, dt=1, jacobian=Tr
     
     return res_pred, pose_pred, vel_pred
 
-def predict(poses, velocities, imu_meas, times, quat_coeff, dt=1, jacobian=True):
+def predict_vel(poses, velocities, imu_meas, times, quat_coeff, dt=1, jacobian=True):
     w, a = imu_meas[..., :3], imu_meas[..., 3:]
     bsz = poses.shape[0]
     N = poses.shape[1]
@@ -249,6 +251,69 @@ def predict(poses, velocities, imu_meas, times, quat_coeff, dt=1, jacobian=True)
             # ipdb.set_trace()
             Hq_full = torch.cat([Hdiff[..., :3], (Hdiff[..., 3:, None]*Gq[:,None,None]).sum(dim=-2)], dim=-1).reshape(bsz, N, 6, N, 6)
             Hq_full = Hq_full.reshape(bsz, N*6, N*6)
+        return res_pred, pose_pred, vel_pred, 0, 0, Jf, Hq_full, qgrad
+    
+    return res_pred, pose_pred, vel_pred
+
+def predict(states, imu_meas, times, quat_coeff, vel_coeff, dt=1, jacobian=True):
+    w, a = imu_meas[..., :3], imu_meas[..., 3:]
+    bsz = states.shape[0]
+    N = states.shape[1]
+    num_res = (N-1)*6
+    def res_preds(states, jac=False):
+        position = states[:,:,:3]
+        rotation = states[:,:,3:7]
+        velocities = states[:,:,7:]
+        # pos_pred, vel_pred = propagate_dynamics(position, velocities, times, dt)
+        # vel = velocities + dt * a#apply_pose_transformation_quat(a, rotation) # SO3(rotation).act(a.unsqueeze(-1)).squeeze(-1)
+        # pos_pred = position + dt * velocities.sum(dim=-2)
+        pos_pred, vel_pred = propagate_orbit_dynamics(position, velocities, times, dt)
+        q_pred, jac_qpred = propagate_rotation_dynamics(rotation, w, times, dt, jac)
+        jac_ppred = torch.eye(3,3)[None, None].repeat(bsz, N, 1, 1)
+        state_pred = torch.cat([pos_pred, q_pred, vel_pred], 2) 
+        # vel_pred = vel
+        res_pred = torch.cat([(pos_pred[:,:-1] - position[:,1:]), (vel_pred[:,:-1]-velocities[:,1:])*vel_coeff, quat_coeff*(1 - torch.abs((q_pred[:,:-1]*rotation[:,1:]).sum(dim=-1)).unsqueeze(-1))], 2)
+        qthat = q_pred[:,:-1]
+        qt = rotation[:,1:]
+        qt1 = rotation[:,:-1]
+        # print(res_pred[:, :, -1].abs().mean(), (q_pred[0,:-1]*states[0,1:,3:]).sum(dim=-1).mean(), (q_pred[0,:-1]*rotation[0,1:]).sum(dim=-1).mean())
+        return res_pred, state_pred, vel_pred, quat_coeff*torch.abs((q_pred[:,:-1]*rotation[:,1:]).sum(dim=-1)), jac_ppred, jac_qpred, qt, qt1, qthat
+    def res_preds_sum(states):
+        states = states.reshape(bsz, -1, 10)
+        return res_preds(states)[0].sum(dim=0)[:,:-1].reshape(-1)
+    def res_preds_sum_quat(states):
+        states = states.reshape(bsz, -1, 10)
+        return res_preds(states)[0].sum(dim=0)[:,-1].reshape(-1)
+    def res_preds_sum_grad(states):
+        states = states.reshape(bsz, -1, 10)
+        Gq = attitude_jacobian(states[:,:,3:7])
+        res_out = res_preds(states)[0][:,:,-1].sum()
+        res_grad = torch.autograd.grad(res_out, states, create_graph=True)[0]
+        res_grad = torch.cat([res_grad[:, :, :3], (res_grad[:, :, 3:7, None]*Gq).sum(dim=2), res_grad[:, :, 7:]], dim=2)
+        return res_grad.reshape(-1)
+    res_pred, pose_pred, vel_pred, qdot, jac_ppred, jac_qpred, qt, qt1, qthat = res_preds(states, jacobian)
+    if jacobian:
+        # print(res_pred[:, :, -1].abs().mean(), (pose_pred[0,:-1,3:]*states[0,1:,3:]).sum(dim=-1).mean())
+        Gq = attitude_jacobian(states[:,:,3:7])
+        Jf = torch.autograd.functional.jacobian(res_preds_sum, states.reshape(bsz, -1), vectorize=True).reshape(bsz, -1, 10)
+        GqJ = Gq[:, None].repeat(bsz, num_res, 1, 1, 1).reshape(bsz, -1, 4, 3)
+        Jf = torch.cat([Jf[:,:,:3], (Jf[:,:,3:7,None] * GqJ).sum(dim=2), Jf[:,:,7:]], dim=2)
+        Jf = Jf.reshape(bsz, num_res, N*9)
+
+        if False:
+            Jf_quat = torch.autograd.functional.jacobian(res_preds_sum_quat, states.reshape(bsz, -1), vectorize=True).reshape(bsz, -1, 7)
+            GqJ = Gq[:, None].repeat(bsz, N-1, 1, 1, 1).reshape(bsz, -1, 4, 3)
+            Jf_quat = torch.cat([Jf_quat[:,:,:3], (Jf_quat[:,:,3:,None] * GqJ).sum(dim=2)], dim=2)
+            Jf_quat = Jf_quat.reshape(bsz, N-1, N*6)
+            qgrad = (Jf_quat*res_pred[:, :, -1:]).sum(dim=1).reshape(bsz, N, 6)
+            Hq_full = torch.bmm(Jf_quat.transpose(-1, -2), Jf_quat)
+        else:
+            states.requires_grad_(True)
+            qgrad = res_preds_sum_grad(states).reshape(bsz, N, 9)
+            Hdiff = torch.autograd.functional.jacobian(res_preds_sum_grad, states[:, :, :].reshape(bsz, -1), vectorize=True).reshape(bsz, N, 9, N, 10)
+            # ipdb.set_trace()
+            Hq_full = torch.cat([Hdiff[..., :3], (Hdiff[..., 3:7, None]*Gq[:,None,None]).sum(dim=-2), Hdiff[..., 7:]], dim=-1).reshape(bsz, N, 9, N, 9)
+            Hq_full = Hq_full.reshape(bsz, N*9, N*9)
         return res_pred, pose_pred, vel_pred, 0, 0, Jf, Hq_full, qgrad
     
     return res_pred, pose_pred, vel_pred
@@ -424,13 +489,32 @@ def ground_truth_sat_dynamics(x, t, params):
 rho_max = 5e-11 #in kg/m3
 rho_min = 2e-14 #in kg/m3
 
+def orbit_dynamics(x_orbit, t=0, params=None, mu=398600.4418, J2=1.75553e10):
+    r = x_orbit[..., :3]
+    v = x_orbit[..., 3:6]
 
-def RK4(x, t, h, params):
+    dims = len(r.shape)
+    r_mat = torch.tensor(np.array([
+        [6, -1.5, -1.5],
+        [6, -1.5, -1.5],
+        [3, -4.5, -4.5]
+    ])).to(r)
+    for i in range(dims-1):
+        r_mat = r_mat.unsqueeze(0)
+
+    # v_dot = -(mu / np.linalg.norm(r)**3) * r + (J2 / np.linalg.norm(r)**7) * np.dot(r, r_mat)
+    v_dot = -(mu / r.norm(dim=-1, keepdim=True)**3) * r + (J2 / torch.norm(r, dim=-1, keepdim=True)**7) * (r_mat*(r[..., None, :]**2)).sum(dim=-1) * r
+
+    return torch.cat([v, v_dot], dim=-1), v_dot
+
+def RK4(x, t, h, params=None):
     
-    f1, _ = ground_truth_sat_dynamics(x, t, params) 
-    f2, _ = ground_truth_sat_dynamics(x+0.5*h*f1, t+h/2, params)
-    f3, _ = ground_truth_sat_dynamics(x+0.5*h*f2, t+h/2, params)
-    f4, _ = ground_truth_sat_dynamics(x+h*f3, t+h, params)
+    # dynamics = ground_truth_sat_dynamics
+    dynamics = orbit_dynamics
+    f1, _ = dynamics(x, t, params) 
+    f2, _ = dynamics(x+0.5*h*f1, t+h/2, params)
+    f3, _ = dynamics(x+0.5*h*f2, t+h/2, params)
+    f4, _ = dynamics(x+h*f3, t+h, params)
     
     xnext = x+(h/6.0)*(f1+2*f2+2*f3+f4)
         
@@ -655,19 +739,19 @@ def gravitational_acceleration(x):
     
     return a_c
 
-def orbit_dynamics(x):
+# def orbit_dynamics(x):
     
-    q_c = x[:, :3]
-    #q_d = x[7:9]
+#     q_c = x[:, :3]
+#     #q_d = x[7:9]
     
-    v_c = x[:, 3:6]
-    #v_d = x[10:12]
+#     v_c = x[:, 3:6]
+#     #v_d = x[10:12]
     
-    a = gravitational_acceleration(x) #obtain the gravitational acceleration given the position q
+#     a = gravitational_acceleration(x) #obtain the gravitational acceleration given the position q
     
-    x_dot = torch.cat([v_c, a[:,:3]], dim=-1)#; zeros(3)] #x dot is velocity and acceleration
+#     x_dot = torch.cat([v_c, a[:,:3]], dim=-1)#; zeros(3)] #x dot is velocity and acceleration
     
-    return x_dot
+#     return x_dot
 
 
 def RK4_satellite_potential(x,h):

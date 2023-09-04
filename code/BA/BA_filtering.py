@@ -11,8 +11,8 @@ from BA.BA_utils import *
 # 4. Integrate with the DL detection stack
 # 5. Implement differentiability for the BA function
 
-def BA(iter, poses, velocities, imu_meas, landmarks, landmarks_xyz, ii, time_idx, intrinsics, confidences, Sigma, V, lamda_init, poses_gt_eci):
-	poses = poses.double()
+def BA(iter, states, velocities, imu_meas, landmarks, landmarks_xyz, ii, time_idx, intrinsics, confidences, Sigma, V, lamda_init, poses_gt_eci):
+	states = states.double()
 	# ipdb.set_trace()
 	v = velocities.double()
 	imu_meas = imu_meas.double()
@@ -21,14 +21,16 @@ def BA(iter, poses, velocities, imu_meas, landmarks, landmarks_xyz, ii, time_idx
 	intrinsics = intrinsics.double()
 	# time_idx = time_idx.double()
 	quat_coeff = 100 #+ min(iter*10, 900)
+	vel_coeff = 1
 
-	bsz = poses.shape[0]
-	landmark_est, Jg = landmark_project(poses, landmarks_xyz, intrinsics, ii, jacobian=True)
-	r_pred, pose_pred, vel_pred, Ji, Ji_1, Jf, Hq, qgrad = predict(poses, velocities, imu_meas, time_idx, quat_coeff, jacobian=True) 
-	# print(r_pred[:, :, -1].abs().mean(), (pose_pred[0,:-1,3:]*poses[0,1:,3:]).sum(dim=-1).mean())
+	bsz = states.shape[0]
+	landmark_est, Jg = landmark_project(states, landmarks_xyz, intrinsics, ii, jacobian=True)
+	r_pred, pose_pred, vel_pred, Ji, Ji_1, Jf, Hq, qgrad = predict(states, imu_meas, time_idx, quat_coeff, vel_coeff, jacobian=True) 
+	ipdb.set_trace()
+	# print(r_pred[:, :, -1].abs().mean(), (pose_pred[0,:-1,3:]*states[0,1:,3:]).sum(dim=-1).mean())
 	r_obs = (landmarks - landmark_est)
 	# ipdb.set_trace()	
-	alpha = 2#max(1 - (2*(iter/5) - 1), -4)
+	alpha = max(1 - (2*(iter/5) - 1), -4)
 	c_obs = r_obs.abs().median()#1000
 	wts_obs = (((((r_obs/c_obs)**2)/abs(alpha-2) + 1)**(alpha/2 - 1)) / ((c_obs)**2)).mean(dim=-1).unsqueeze(-1).unsqueeze(-1)[0]
 	# ipdb.set_trace()
@@ -37,8 +39,8 @@ def BA(iter, poses, velocities, imu_meas, landmarks, landmarks_xyz, ii, time_idx
 	# r_full = torch.cat([r_obs, r_pred], dim = 1)
 	Sigma = 100*(iter+1)**2#1#00
 	V = 1
-	dim_base = 6
-	dim = 6
+	dim_base = 9
+	dim = 9
 	Jg = Jg.reshape(bsz, -1, dim_base)[:, :, :dim].reshape(-1, 2, dim)
 	
 	JgTwJg = torch.bmm((Jg*wts_obs).transpose(1,2), Jg).reshape(bsz, -1, dim, dim)
@@ -50,7 +52,7 @@ def BA(iter, poses, velocities, imu_meas, landmarks, landmarks_xyz, ii, time_idx
 	# Bjj = torch.matmul(wJi_1T, Ji_1)
 
 	# scatter sum of Bii, Bij, Bji, Bjj and JgTwJg
-	n = poses.shape[1]
+	n = states.shape[1]
 	# i_1 = torch.arange(0, n-1).unsqueeze(0)
 	# i = i_1 + 1
 	# JfTwJf = safe_scatter_add_mat(Bii, i, i, n, n).view(bsz, n, n, 6, 6) + \
@@ -60,17 +62,17 @@ def BA(iter, poses, velocities, imu_meas, landmarks, landmarks_xyz, ii, time_idx
 	# JfTwJf = JfTwJf.transpose(2,3).reshape(bsz, n*6, n*6)
 	# # JgTwJg = JfTwJf.transpose(2,3).reshape(bsz, n*6, n*6)
 	# ipdb.set_trace()
-	ii_t = torch.tensor(ii, dtype=torch.long, device=poses.device)
+	ii_t = torch.tensor(ii, dtype=torch.long, device=states.device)
 	JgTwJg = safe_scatter_add_vec(JgTwJg, ii_t, n).view(bsz, n, dim, dim)
 	JgTwJg = torch.block_diag(*JgTwJg[0].unbind(dim=0)).unsqueeze(0)
 	# JfTwJf = scatter_sum(B, i*n + i_1, dim=1, dim_size=n*n) 
 
 	# ipdb.set_trace()
-	dim2 = min(3, dim)
+	dim2 = min(6, dim)
 	Jf = Jf.view(bsz, (n-1)*dim2, n*dim)
-	Jf_x = Jf.view(bsz, n-1, dim2, n*dim)[:, :, :3, :]
-	# ipdb.set_trace()
-	Jf_x = Jf_x.reshape((bsz, -1, n*dim))
+	# Jf_x = Jf.view(bsz, n-1, dim2, n*dim)[:, :, :3, :]
+	# # ipdb.set_trace()
+	# Jf_x = Jf_x.reshape((bsz, -1, n*dim))
 	JfTwJf = torch.bmm((Jf*Sigma).transpose(1,2), Jf)
 	# Hq = Sigma*torch.block_diag(*Hq[0].unbind(dim=0)).unsqueeze(0)*0
 
@@ -85,7 +87,7 @@ def BA(iter, poses, velocities, imu_meas, landmarks, landmarks_xyz, ii, time_idx
 	r_pred = r_pred[:, :,  :dim]
 	JgT_robs = safe_scatter_add_vec((Jg.reshape(bsz, -1, 2, dim)*wts_obs[None]*r_obs.unsqueeze(-1)).sum(dim=-2), ii_t, n).view(bsz, n,dim)
 	# ipdb.set_trace()
-	r_pred_x = r_pred[:, :, :3].clone()
+	r_pred_x = r_pred[:, :, :6].clone()
 	# r_pred_x[:, :, 3:] = 1
 	JfT_rpred = (r_pred_x.reshape(bsz, -1, 1) * Sigma * Jf).sum(dim=1).reshape(bsz, n, dim)*(-1)#.01
 	JTr = (JgT_robs + JfT_rpred - Sigma*qgrad).reshape(bsz, -1)#+ JfT_rpred
@@ -103,13 +105,14 @@ def BA(iter, poses, velocities, imu_meas, landmarks, landmarks_xyz, ii, time_idx
 			dpose = torch.linalg.solve(JTwJ, JTr).reshape(bsz, n, dim)
 		
 			# ipdb.set_trace()
-			position = poses[:,:,:3] + dpose[:,:,:3]
-			rotation = quaternion_multiply(poses[:,:,3:], quaternion_exp(dpose[:,:,3:]))
+			position = states[:,:,:3] + dpose[:,:,:3]
+			vels = states[:,:,7:] + dpose[:,:,6:]
+			rotation = quaternion_multiply(states[:,:,3:7], quaternion_exp(dpose[:,:,3:6]))
 			rotation = rotation / torch.norm(rotation, dim=2, keepdim=True)
-			# rotation[:, 0] = poses[:, 0, 3:].clone()
-			poses_new = torch.cat([position, rotation], 2)
-			landmark_est = landmark_project(poses_new, landmarks_xyz, intrinsics, ii, jacobian=False)
-			r_pred1, _, _ = predict(poses_new, velocities, imu_meas, time_idx, quat_coeff, jacobian=False) 
+			# rotation[:, 0] = states[:, 0, 3:].clone()
+			states_new = torch.cat([position, rotation, vels], 2)
+			landmark_est = landmark_project(states_new, landmarks_xyz, intrinsics, ii, jacobian=False)
+			r_pred1, _, _ = predict(states_new, velocities, imu_meas, time_idx, quat_coeff, jacobian=False) 
 			r_obs1 = (landmarks - landmark_est)*wts_obs[None, :, 0]
 			r_pred1 = r_pred1[:, :,  :dim].reshape(bsz, -1) * np.sqrt(Sigma)#*0.01
 			r_obs1 = r_obs1.reshape(bsz, -1)
@@ -134,12 +137,12 @@ def BA(iter, poses, velocities, imu_meas, landmarks, landmarks_xyz, ii, time_idx
 	# init_residual = (r_obs.abs()).sum() + (r_pred.abs()).sum()*np.sqrt(Sigma)
 	print("alpha: ", alpha, r_pred.abs().mean()* np.sqrt(Sigma), r_obs.abs().mean())
 	# while True:
-	# 	position = poses[:,:,:3] + alpha*dpose[:,:,:3]
-	# 	rotation = quaternion_multiply(poses[:,:,3:], quaternion_exp(alpha*dpose[:,:,3:]))
+	# 	position = states[:,:,:3] + alpha*dpose[:,:,:3]
+	# 	rotation = quaternion_multiply(states[:,:,3:], quaternion_exp(alpha*dpose[:,:,3:]))
 	# 	rotation = rotation / torch.norm(rotation, dim=2, keepdim=True)
-	# 	poses_new = torch.cat([position, rotation], 2)
-	# 	landmark_est = landmark_project(poses_new, landmarks_xyz, intrinsics, ii, jacobian=False)
-	# 	r_pred1, _, _ = predict(poses_new, velocities, imu_meas, time_idx, quat_coeff, jacobian=False) 
+	# 	states_new = torch.cat([position, rotation], 2)
+	# 	landmark_est = landmark_project(states_new, landmarks_xyz, intrinsics, ii, jacobian=False)
+	# 	r_pred1, _, _ = predict(states_new, velocities, imu_meas, time_idx, quat_coeff, jacobian=False) 
 	# 	r_obs1 = (landmarks - landmark_est)*wts_obs[None, :, 0]
 	# 	r_pred1 = r_pred1[:, :,  :dim].reshape(bsz, -1) * np.sqrt(Sigma)#*0.01
 	# 	r_obs1 = r_obs1.reshape(bsz, -1)
@@ -154,26 +157,28 @@ def BA(iter, poses, velocities, imu_meas, landmarks, landmarks_xyz, ii, time_idx
 	# 		break
 		
 
-	# position = poses[:,:,:3] + dpose[:,:,:3]
-	# rotation = quaternion_multiply(poses[:,:,3:], quaternion_exp(dpose[:,:,3:]))
+	# position = states[:,:,:3] + dpose[:,:,:3]
+	# rotation = quaternion_multiply(states[:,:,3:], quaternion_exp(dpose[:,:,3:]))
 	# # ipdb.set_trace()
 	# # rotation = rotation[:, 1:]
-	# # rotation = poses[:,1:,3:] + dpose[:,1:,3:]
+	# # rotation = states[:,1:,3:] + dpose[:,1:,3:]
 	# rotation = rotation / torch.norm(rotation, dim=2, keepdim=True)
-	# poses_new = torch.cat([position, rotation], 2)
-	# # poses_new = torch.cat([poses[:,:1], poses_new], 1)
-	# # print("final: ", (poses_new[0,:3, :3]-poses_gt_eci[:3, :3]).abs().mean(dim=0))
-	# # print("init: ", (poses[0,:3, :3] - poses_gt_eci[:3, :3]).abs().mean(dim=0))
+	# states_new = torch.cat([position, rotation], 2)
+	# # states_new = torch.cat([states[:,:1], states_new], 1)
+	# # print("final: ", (states_new[0,:3, :3]-states_gt_eci[:3, :3]).abs().mean(dim=0))
+	# # print("init: ", (states[0,:3, :3] - states_gt_eci[:3, :3]).abs().mean(dim=0))
 	# # print("r_pred :", r_pred[0,:3].abs().mean(dim=0))
 	# # print("r_obs :", r_obs[0,:3].abs().mean(dim=0))
 
-	print("final quat: ", (poses_new[0,:, 3:]-poses_gt_eci[:, 3:]).abs().mean(dim=0), (1 - torch.abs((poses_new[0,:, 3:] * poses_gt_eci[:, 3:]).sum(dim=-1))).mean())
+	print("final quat: ", (states_new[0,:, 3:7]-poses_gt_eci[:, 3:]).abs().mean(dim=0), (1 - torch.abs((states_new[0,:, 3:7] * poses_gt_eci[:, 3:]).sum(dim=-1))).mean())
 	# print("final: ", (poses_new2[0,:3, 3:]-poses_gt_eci[:3, 3:]).abs().mean(dim=0))
 	# print("final: ", (poses_new3[0,:3, 3:]-poses_gt_eci[:3, 3:]).abs().mean(dim=0))
-	print("init quat: ", (poses[0,:, 3:] - poses_gt_eci[:, 3:]).abs().mean(dim=0), (1 - torch.abs((poses[0,:, 3:] * poses_gt_eci[:, 3:]).sum(dim=-1))).mean())
-	print("final pos: ", (poses_new[0,:, :3]-poses_gt_eci[:, :3]).abs().mean(dim=0))
-	print("init pos: ", (poses[0,:, :3] - poses_gt_eci[:, :3]).abs().mean(dim=0))
+	print("init quat: ", (states[0,:, 3:7] - poses_gt_eci[:, 3:]).abs().mean(dim=0), (1 - torch.abs((states[0,:, 3:7] * poses_gt_eci[:, 3:]).sum(dim=-1))).mean())
+	print("final pos: ", (states_new[0,:, :3]-poses_gt_eci[:, :3]).abs().mean(dim=0))
+	print("init pos: ", (states[0,:, :3] - poses_gt_eci[:, :3]).abs().mean(dim=0))
+	print("final vels: ", (states_new[0,:, 7:]-velocities).abs().mean(dim=0))
+	print("init vels: ", (states[0,:, 7:] - velocities).abs().mean(dim=0))
 	print("r_pred :", r_pred[0,:].abs().mean(dim=0), r_pred[0,:].abs().mean(dim=0)[-1].item())
 	print("r_obs :", r_obs[0,:].abs().mean(dim=0))
 	# ipdb.set_trace()
-	return poses_new, velocities, lamda_init
+	return states_new, velocities, lamda_init
