@@ -1,5 +1,4 @@
 import torch
-# from lietorch.groups import SO3, SE3
 import numpy as np
 from BA.utils import *
 from scipy.spatial import transform
@@ -14,7 +13,6 @@ def proj(X, intrinsics):
     d = 1.0 / Z.clamp(min=0.1)
     x = fx * (d * X) + cx
     y = fy * (d * Y) + cy
-    # ipdb.set_trace()
 
     return torch.stack([x, y], dim=-1)
 
@@ -30,9 +28,6 @@ def attitude_jacobian(q):
     return Gq
 
 def landmark_project(poses, landmarks_xyz, intrinsics, ii, jacobian=True):
-    # ipdb.set_trace()
-    # landmark_est = torch.zeros_like(landmarks_xyz[:, :, :2])
-    # Jg = torch.zeros(landmarks_xyz.shape[0], landmarks_xyz.shape[1], 3*poses.shape[1])
     poses_ii = poses[:, ii, :]
     bsz = poses_ii.shape[0]
     poses_ii = poses_ii.reshape(-1, 10)[:, :7].requires_grad_(True)
@@ -45,16 +40,10 @@ def landmark_project(poses, landmarks_xyz, intrinsics, ii, jacobian=True):
         return landmark_est
     def project_ii_sum(poses_ii):
         return project_ii(poses_ii).sum(dim=0)
-    # X1 = apply_inverse_pose_transformation(landmarks_xyz, poses_ii[:, :, 3:], poses_ii[:, :, :3])
-    # X1 = torch.stack([X1[...,0], X1[...,1], X1[...,2], torch.ones_like(X1[...,1])], dim=-1)
-    # landmark_est = proj(X1, intrinsics[:, ii])
     landmark_est = project_ii(poses_ii).reshape(bsz, -1, 2)
-    # ipdb.set_trace()
     if jacobian:
         Gq = attitude_jacobian(poses_ii[:,3:])
-        # Jg = torch.autograd.functional.jacobian(landmark_est.reshape(-1, 2), poses_ii.reshape(-1,7))
         Jg = torch.autograd.functional.jacobian(project_ii_sum, poses_ii, vectorize=True).transpose(0,1)
-        # ipdb.set_trace()
         Jg = torch.cat([Jg[:,:,:3], torch.bmm(Jg[:,:,3:], Gq)], dim=2).reshape(-1, 2, 6)
         Jg = torch.cat([Jg, torch.zeros_like(Jg)[...,:3]], dim=-1)
         return landmark_est, Jg
@@ -69,7 +58,7 @@ def propagate_orbit_dynamics(position, velocities, times, dt):
     x_shape = x.shape
     for i in range(max_time_diff):
         x = RK4(x, i, dt)
-        x_pred.append(x)#[:, :, :3])
+        x_pred.append(x)
     x_pred = torch.stack(x_pred, dim=-2)
     x_pred = x_pred[..., torch.arange(len(time_diffs)), time_diffs-1, :]
     pos_pred = x_pred[..., :3]
@@ -260,24 +249,20 @@ def predict(states, imu_meas, times, quat_coeff, vel_coeff, dt=1, jacobian=True)
     bsz = states.shape[0]
     N = states.shape[1]
     num_res = (N-1)*6
+    GN_quat = False
     def res_preds(states, jac=False):
         position = states[:,:,:3]
         rotation = states[:,:,3:7]
         velocities = states[:,:,7:]
-        # pos_pred, vel_pred = propagate_dynamics(position, velocities, times, dt)
-        # vel = velocities + dt * a#apply_pose_transformation_quat(a, rotation) # SO3(rotation).act(a.unsqueeze(-1)).squeeze(-1)
-        # pos_pred = position + dt * velocities.sum(dim=-2)
         pos_pred, vel_pred = propagate_orbit_dynamics(position, velocities, times, dt)
         q_pred, jac_qpred = propagate_rotation_dynamics(rotation, w, times, dt, jac)
         jac_ppred = torch.eye(3,3)[None, None].repeat(bsz, N, 1, 1)
         state_pred = torch.cat([pos_pred, q_pred, vel_pred], 2) 
-        # vel_pred = vel
         res_pred = torch.cat([(pos_pred[:,:-1] - position[:,1:]), (vel_pred[:,:-1]-velocities[:,1:])*vel_coeff, quat_coeff*(1 - torch.abs((q_pred[:,:-1]*rotation[:,1:]).sum(dim=-1)).unsqueeze(-1))], 2)
         qthat = q_pred[:,:-1]
         qt = rotation[:,1:]
         qt1 = rotation[:,:-1]
-        # print(res_pred[:, :, -1].abs().mean(), (q_pred[0,:-1]*states[0,1:,3:]).sum(dim=-1).mean(), (q_pred[0,:-1]*rotation[0,1:]).sum(dim=-1).mean())
-        return res_pred, state_pred, vel_pred, quat_coeff*torch.abs((q_pred[:,:-1]*rotation[:,1:]).sum(dim=-1)), jac_ppred, jac_qpred, qt, qt1, qthat
+        return res_pred, state_pred, vel_pred
     def res_preds_sum(states):
         states = states.reshape(bsz, -1, 10)
         return res_preds(states)[0].sum(dim=0)[:,:-1].reshape(-1)
@@ -291,16 +276,15 @@ def predict(states, imu_meas, times, quat_coeff, vel_coeff, dt=1, jacobian=True)
         res_grad = torch.autograd.grad(res_out, states, create_graph=True)[0]
         res_grad = torch.cat([res_grad[:, :, :3], (res_grad[:, :, 3:7, None]*Gq).sum(dim=2), res_grad[:, :, 7:]], dim=2)
         return res_grad.reshape(-1)
-    res_pred, pose_pred, vel_pred, qdot, jac_ppred, jac_qpred, qt, qt1, qthat = res_preds(states, jacobian)
+    res_pred, pose_pred, vel_pred = res_preds(states, jacobian)
     if jacobian:
-        # print(res_pred[:, :, -1].abs().mean(), (pose_pred[0,:-1,3:]*states[0,1:,3:]).sum(dim=-1).mean())
         Gq = attitude_jacobian(states[:,:,3:7])
         Jf = torch.autograd.functional.jacobian(res_preds_sum, states.reshape(bsz, -1), vectorize=True).reshape(bsz, -1, 10)
         GqJ = Gq[:, None].repeat(bsz, num_res, 1, 1, 1).reshape(bsz, -1, 4, 3)
         Jf = torch.cat([Jf[:,:,:3], (Jf[:,:,3:7,None] * GqJ).sum(dim=2), Jf[:,:,7:]], dim=2)
         Jf = Jf.reshape(bsz, num_res, N*9)
 
-        if False:
+        if GN_quat:
             Jf_quat = torch.autograd.functional.jacobian(res_preds_sum_quat, states.reshape(bsz, -1), vectorize=True).reshape(bsz, -1, 7)
             GqJ = Gq[:, None].repeat(bsz, N-1, 1, 1, 1).reshape(bsz, -1, 4, 3)
             Jf_quat = torch.cat([Jf_quat[:,:,:3], (Jf_quat[:,:,3:,None] * GqJ).sum(dim=2)], dim=2)
@@ -311,7 +295,6 @@ def predict(states, imu_meas, times, quat_coeff, vel_coeff, dt=1, jacobian=True)
             states.requires_grad_(True)
             qgrad = res_preds_sum_grad(states).reshape(bsz, N, 9)
             Hdiff = torch.autograd.functional.jacobian(res_preds_sum_grad, states[:, :, :].reshape(bsz, -1), vectorize=True).reshape(bsz, N, 9, N, 10)
-            # ipdb.set_trace()
             Hq_full = torch.cat([Hdiff[..., :3], (Hdiff[..., 3:7, None]*Gq[:,None,None]).sum(dim=-2), Hdiff[..., 7:]], dim=-1).reshape(bsz, N, 9, N, 9)
             Hq_full = Hq_full.reshape(bsz, N*9, N*9)
         return res_pred, pose_pred, vel_pred, 0, 0, Jf, Hq_full, qgrad
