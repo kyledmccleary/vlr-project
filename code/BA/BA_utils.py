@@ -319,6 +319,41 @@ def predict(states, imu_meas, times, quat_coeff, vel_coeff, dt=1, jacobian=True)
     return res_pred, pose_pred, vel_pred
 
 
+def predict_orbit(states, imu_meas, times, quat_coeff, vel_coeff, dt=1, jacobian=True):
+    w, a = imu_meas[..., :3], imu_meas[..., 3:]
+    bsz = states.shape[0]
+    N = states.shape[1]
+    num_res = (N-1)*6
+    def res_preds(states, jac=False):
+        position = states[:,:,:3]
+        velocities = states[:,:,3:]
+        # pos_pred, vel_pred = propagate_dynamics(position, velocities, times, dt)
+        # vel = velocities + dt * a#apply_pose_transformation_quat(a, rotation) # SO3(rotation).act(a.unsqueeze(-1)).squeeze(-1)
+        # pos_pred = position + dt * velocities.sum(dim=-2)
+        pos_pred, vel_pred = propagate_orbit_dynamics(position, velocities, times, dt)
+        # q_pred, jac_qpred = propagate_rotation_dynamics(rotation, w, times, dt, jac)
+        jac_ppred = torch.eye(3,3)[None, None].repeat(bsz, N, 1, 1)
+        state_pred = torch.cat([pos_pred, vel_pred], 2) 
+        # vel_pred = vel
+        res_pred = torch.cat([(pos_pred[:,:-1] - position[:,1:]), (vel_pred[:,:-1]-velocities[:,1:])*vel_coeff], 2)
+        # print(res_pred[:, :, -1].abs().mean(), (q_pred[0,:-1]*states[0,1:,3:]).sum(dim=-1).mean(), (q_pred[0,:-1]*rotation[0,1:]).sum(dim=-1).mean())
+        return res_pred, state_pred, vel_pred
+    def res_preds_sum(states):
+        states = states.reshape(bsz, -1, 6)
+        return res_preds(states)[0].sum(dim=0).reshape(-1)
+    res_pred, pose_pred, vel_pred = res_preds(states, jacobian)
+    if jacobian:
+        # print(res_pred[:, :, -1].abs().mean(), (pose_pred[0,:-1,3:]*states[0,1:,3:]).sum(dim=-1).mean())
+        # Gq = attitude_jacobian(states[:,:,3:7])
+        Jf = torch.autograd.functional.jacobian(res_preds_sum, states.reshape(bsz, -1), vectorize=True).reshape(bsz, -1, 6)
+        # GqJ = Gq[:, None].repeat(bsz, num_res, 1, 1, 1).reshape(bsz, -1, 4, 3)
+        # Jf = torch.cat([Jf[:,:,:3], (Jf[:,:,3:7,None] * GqJ).sum(dim=2), Jf[:,:,7:]], dim=2)
+        # ipdb.set_trace()
+        Jf = Jf.reshape(bsz, num_res, N*6)
+        return res_pred, pose_pred, vel_pred, 0, 0, Jf    
+    return res_pred, pose_pred, vel_pred
+
+
 def predict_attitude(poses, velocities, imu_meas, times, quat_coeff, dt=1, jacobian=True):
     w, a = imu_meas[..., :3], imu_meas[..., 3:]
     bsz = poses.shape[0]
