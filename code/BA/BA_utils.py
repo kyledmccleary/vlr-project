@@ -945,7 +945,7 @@ def convert_quaternion_to_xyz_orientation_fixed(quat, times):
 def convert_quaternion_to_xyz_orientation(quat, times):
     # Step 1: convert quat to rotation matrix
     # NEED TO SWITCH  QUAT FROM [qw, q1, q2, q3] to [q1, q2, q3, qw]
-    # quat = np.concatenate([quat[:, 1:], quat[:, :1]], axis=-1)
+    quat = np.concatenate([quat[:, 1:], quat[:, :1]], axis=-1)
     rot = transform.Rotation.from_quat(quat)
     R = rot.as_matrix()
 

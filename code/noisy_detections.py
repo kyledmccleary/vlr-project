@@ -21,7 +21,7 @@ def noisy_detections():
         boxes = load_boxes()
         boxes = np.concatenate(boxes, axis = 0)
         boxes_centroid = centroid_boxes(boxes)
-        sample_ratio = 3
+        sample_ratio = 1
         boxes_centroid_sample = boxes_centroid[range(0,len(boxes_centroid),sample_ratio)]
         #pose_test = np.concatenate((traj[0,:3],traj[0,6:10]), axis=None)
         #eci_boxes = convert_latlong_to_cartesian(boxes_centroid[:,1], boxes_centroid[:,0],0)
@@ -36,23 +36,32 @@ def noisy_detections():
         #aprint(positions.shape)
         seq = np.concatenate((positions,camera_vecs),axis=1)
         for t in range(len(tsamp)):
-            pose = np.concatenate((traj[t,:3],traj[t,6:10]), axis=None)
+            quat = np.concatenate((traj[t,7:10],traj[t,6:7]), axis=None)
+            pose = np.concatenate((traj[t,:3],quat), axis=None)
             eci_boxes_frame = convert_latlong_to_cartesian(boxes_centroid_sample[:,1], boxes_centroid_sample[:,0],tsamp[t])
             # check_projection_torch(traj, boxes, intrinsics, tsamp[t] )
-            for k in range(len(eci_boxes_frame)):
-                feature = eci_boxes_frame[k]
-                #print(np.linalg.norm(pose[:3]),np.linalg.norm(feature))
-                ipdb.set_trace()
-                uv = check_projection(pose, feature,intrinsics)
-                #print(uv)
-                if uv is not None:
-                    #print(uv, pose[:3], feature)
-                    box_k = boxes_centroid[k,:]
-                    #print(box_k)
-                    detection = np.zeros(6)
-                    detection[0], detection[1:3], detection[3:5], detection[5:] = t,uv,box_k,1
-                    detections.append(detection)
-        detections = np.array(detections)
+            poses = pose[None].repeat(len(eci_boxes_frame), axis=0)
+            uv, mask = check_projections(poses, eci_boxes_frame, intrinsics)
+        
+            uv = uv[mask,:]
+            detection = np.concatenate((t*np.ones((uv.shape[0],1)),uv,boxes_centroid_sample[mask,:],np.ones((uv.shape[0],1))),axis=1)
+
+            detections.append(detection)
+            # for k in range(len(eci_boxes_frame)):
+            #     feature = eci_boxes_frame[k]
+            #     #print(np.linalg.norm(pose[:3]),np.linalg.norm(feature))
+            #     ipdb.set_trace()
+            #     uv = check_projection(pose, feature,intrinsics)
+            #     #print(uv)
+            #     if uv is not None:
+            #         #print(uv, pose[:3], feature)
+            #         box_k = boxes_centroid_sample[k,:]
+            #         #print(box_k)
+            #         detection = np.zeros(6)
+            #         detection[0], detection[1:3], detection[3:5], detection[5:] = t,uv,box_k,1
+            #         detections.append(detection)
+        detections = np.concatenate(detections, axis=0)
+        ipdb.set_trace()
         #print(seq[0,:])
         np.save("landmarks/rand_detections_%s"%iter, detections)
         np.save("landmarks/rand_seq_%s"%iter, seq)
@@ -101,6 +110,30 @@ def check_projection(pose, point, intrinsics):
     else:
         return None
 
+def check_projections(pose, point, intrinsics):
+    x_pose = pose[:,:3]
+    quat_pose = pose[:,3:]
+    translation = point - x_pose
+    pixel_error = 0
+    # if np.linalg.norm(translation)>1e3:
+    #     return None
+    dist_mask = np.linalg.norm(translation, axis=1) < 1e3
+    point_rotated = apply_inverse_pose_transformation_np(point, quat_pose, x_pose)
+    #print(point_rotated)
+    uv = proj_np(point_rotated, intrinsics)
+    noise = np.round(pixel_error*np.random.randn(uv.shape[0],2))
+    uv = uv+noise
+    mask = np.logical_and(np.logical_and(0<uv[:,0],uv[:,0]<2600),np.logical_and(0<uv[:,1],uv[:,1]<2000))
+    mask = np.logical_and(mask, dist_mask)
+    return uv, mask
+    # if (0<uv[0]<2600 and 0<uv[1]<2000):
+    #     #print(point, x_pose)
+    #     noise = np.round(pixel_error*np.random.randn(2))
+    #     uv = uv+noise
+    #     return np.array(uv)
+    # else:
+    #     return None
+
 
 def centroid_boxes(boxes):
     boxes_centroids = []
@@ -124,13 +157,13 @@ def apply_inverse_pose_transformation_np(point, rotation_quaternion, translation
         point = point - translation
     # Normalize the quaternion
     #q_norm = rotation_quaternion/rotation_quaternion.norm(dim=-1).unsqueeze(-1)
-    q_norm = rotation_quaternion/(np.linalg.norm(rotation_quaternion))
+    q_norm = rotation_quaternion/(np.linalg.norm(rotation_quaternion, axis=-1, keepdims=True))
 
     # Convert the point to a quaternion representation (w=0)
     #v = torch.cat([point, torch.zeros_like(point[:,:,:1])], dim=-1)
-    v = np.array([point[0],point[1],point[2],0])
+    v = np.stack([point[...,0],point[...,1],point[...,2],np.zeros_like(point[...,0])] , axis=-1)
     # Compute the quaternion conjugate
-    q_conj = np.array([-q_norm[0],-q_norm[1],-q_norm[2], q_norm[3]])
+    q_conj = np.stack([-q_norm[...,0],-q_norm[...,1],-q_norm[...,2], q_norm[...,3]], axis=-1)
 
     # Apply the quaternion rotation using quaternion multiplication
     v_rotated = quaternion_multiply_np(q_conj, quaternion_multiply_np(v, q_norm))
@@ -139,23 +172,23 @@ def apply_inverse_pose_transformation_np(point, rotation_quaternion, translation
 def quaternion_multiply_np(q1, q2):
     """Multiply two quaternions."""
     #print(q1,q2)
-    x1, y1, z1, w1 = q1[0], q1[1], q1[2], q1[3]
-    x2, y2, z2, w2 = q2[0], q2[1], q2[2], q2[3]
+    x1, y1, z1, w1 = q1[..., 0], q1[..., 1], q1[..., 2], q1[..., 3]
+    x2, y2, z2, w2 = q2[..., 0], q2[..., 1], q2[..., 2], q2[..., 3]
     w_mul = w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2
     x_mul = w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2
     y_mul = w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2
     z_mul = w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2
-    return np.array([x_mul, y_mul, z_mul, w_mul])
+    return np.stack([x_mul, y_mul, z_mul, w_mul], axis=-1)
 def proj_np(X, intrinsics):
     """ projection """
 
-    X, Y, Z, W = X[0],X[1], X[2], X[3]
+    X, Y, Z, W = X[..., 0],X[..., 1], X[...,2], X[...,3]
     fx, fy, cx, cy = intrinsics[0],intrinsics[1], intrinsics[2], intrinsics[3] #[...,None,None]
 
     d = 1.0 / np.clip(Z,0.1,None)
     x = fx * (d * X) + cx
     y = fy * (d * Y) + cy
 
-    return np.array([x, y])
+    return np.stack([x, y], axis=-1)
 
 noisy_detections()
