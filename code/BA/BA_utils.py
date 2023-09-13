@@ -277,12 +277,14 @@ def predict(states, imu_meas, times, quat_coeff, vel_coeff, dt=1, jacobian=True)
         res_grad = torch.cat([res_grad[:, :, :3], (res_grad[:, :, 3:7, None]*Gq).sum(dim=2), res_grad[:, :, 7:]], dim=2)
         return res_grad.reshape(-1)
     res_pred, pose_pred, vel_pred = res_preds(states, jacobian)
+    print("finished residual computation")
     if jacobian:
         Gq = attitude_jacobian(states[:,:,3:7])
         Jf = torch.autograd.functional.jacobian(res_preds_sum, states.reshape(bsz, -1), vectorize=True).reshape(bsz, -1, 10)
         GqJ = Gq[:, None].repeat(bsz, num_res, 1, 1, 1).reshape(bsz, -1, 4, 3)
         Jf = torch.cat([Jf[:,:,:3], (Jf[:,:,3:7,None] * GqJ).sum(dim=2), Jf[:,:,7:]], dim=2)
         Jf = Jf.reshape(bsz, num_res, N*9)
+        print("finished Jacobian computation")
 
         if GN_quat:
             Jf_quat = torch.autograd.functional.jacobian(res_preds_sum_quat, states.reshape(bsz, -1), vectorize=True).reshape(bsz, -1, 7)
@@ -297,6 +299,7 @@ def predict(states, imu_meas, times, quat_coeff, vel_coeff, dt=1, jacobian=True)
             Hdiff = torch.autograd.functional.jacobian(res_preds_sum_grad, states[:, :, :].reshape(bsz, -1), vectorize=True).reshape(bsz, N, 9, N, 10)
             Hq_full = torch.cat([Hdiff[..., :3], (Hdiff[..., 3:7, None]*Gq[:,None,None]).sum(dim=-2), Hdiff[..., 7:]], dim=-1).reshape(bsz, N, 9, N, 9)
             Hq_full = Hq_full.reshape(bsz, N*9, N*9)
+        print("finished hessian computation")
         return res_pred, pose_pred, vel_pred, 0, 0, Jf, Hq_full, qgrad
     
     return res_pred, pose_pred, vel_pred

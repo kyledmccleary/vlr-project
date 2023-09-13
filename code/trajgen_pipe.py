@@ -224,7 +224,7 @@ def generate_new_traj(orbit_type='polar'):
     x0_orbit = oe2eci(oe)
 
     # Simulate for 3 hours (~2 orbits)
-    tf = 3 * 60 * 60
+    tf = 0.25 * 60 * 60
     tsamp = np.arange(0, tf+1, 1)
 
     xtraj_orbit = np.zeros((6, len(tsamp)))
@@ -247,8 +247,10 @@ def generate_new_traj(orbit_type='polar'):
 
     for k in range(len(tsamp)-1):
         xtraj_attitude[:, k+1] = attitude_step(xtraj_attitude[:, k], 1.0)
+    
+    #print(xtraj_orbit.shape, xtraj_attitude.shape)
 
-    return np.concatenate([xtraj_orbit, xtraj_attitude], axis=1), tsamp
+    return np.hstack((xtraj_orbit.T, xtraj_attitude.T)), tsamp
 
 if __name__ == "__main__":
 
@@ -275,7 +277,7 @@ if __name__ == "__main__":
     for k in range(len(tsamp)-1):
         xtraj_orbit[:, k+1] = orbit_step(xtraj_orbit[:, k], 1.0)
     np.set_printoptions(threshold=np. inf, suppress=True, linewidth=np. inf) 
-    print(xtraj_orbit[:,:10].T)
+    #print(xtraj_orbit[:,:10].T)
 
     # Random initial conditions
     q0 = np.ones(4)*0.5#np.random.randn(4)
@@ -290,4 +292,4 @@ if __name__ == "__main__":
     for k in range(len(tsamp)-1):
         xtraj_attitude[:, k+1] = attitude_step(xtraj_attitude[:, k], 1.0)
 
-    print(xtraj_attitude[:,:10].T)
+    #print(xtraj_attitude[:,:10].T)

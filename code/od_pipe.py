@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import json
 # import pandas
 import ipdb
+from trajgen_pipe import *
 
 def od_pipe(data, orbit_lat_long):
 
@@ -176,22 +177,29 @@ def read_data(sample_dets=False):
     return orbit, landmarks_dict, intrinsics, time_idx, ii
 
 def read_detections(sample_dets=False):
-    landmarks = np.load("landmarks/detections.npy", allow_pickle=True)
+    landmarks = np.load("landmarks/detections_2.npy", allow_pickle=True)
+    landmarks[:,0]+=1
+    #landmarks = np.load("landmarks/detections_0.npy", allow_pickle=True)
     landmarks_dict = {}
     landmarks_dict["frame"] = landmarks[:,0]
     landmarks_dict["uv"] = landmarks[:,1:3]
     landmarks_dict["lonlat"] = landmarks[:,3:5]
     landmarks_dict["confidence"] = landmarks[:,5]
     time_idx = np.unique(landmarks[:,0]).astype(np.int64)
+
     ii = []
     for i, tidx in enumerate(time_idx):
         num_points = (landmarks[:,0]==tidx).sum()
         ii = ii + [i]*num_points
     ii = np.array(ii)
-    with open('landmarks/seq.txt', 'r') as infile:
+    with open('landmarks/orbit_3hr_noskip.txt', 'r') as infile:
         orbit = json.load(infile)
     orbit = np.array(orbit)
     orbit[:,0], orbit[:,1], orbit[:,2] = ecef_to_eci(orbit[:,0]/1000, orbit[:,1]/1000, orbit[:,2]/1000, times = np.arange(orbit.shape[0]))
+    #orbit = np.load("landmarks/seq_0.npy")
+    #print(orbit[0,:], "\n", orbit2[0,:])
+    #print(orbit.shape, orbit2.shape, landmarks.shape, time_idx.shape)
+    #print(time_idx.shape)
 
     intrinsics = np.genfromtxt("landmarks/intrinsics.csv", delimiter=',')[0] #  might have to specify manually
     return orbit, landmarks_dict, intrinsics, time_idx, ii
@@ -259,9 +267,9 @@ if __name__ == "__main__":
     ### Obtain acceleration from orbital dynamics and angular velocity from IMU
     states_gt_eci = torch.cat([poses_gt_eci, gt_vel_eci[time_idx]], dim=-1)
     landmark_uv_proj = landmark_project(states_gt_eci.unsqueeze(0), landmarks_xyz.unsqueeze(0), intrinsics.unsqueeze(0), ii, jacobian=False)
-    mask = ((landmark_uv_proj[:, :, 0] > 0)*(landmark_uv_proj[:, :, 1] > 0)*(landmark_uv_proj[:, :, 0] < 2600)*(landmark_uv_proj[:, :, 1] < 2000)*((landmark_uv_proj - landmarks_uv[None]).norm(dim=-1)<1000)*(torch.tensor(landmarks_dict["confidence"])>0.8) )[0]
+    mask = ((landmark_uv_proj[:, :, 0] > 0)*(landmark_uv_proj[:, :, 1] > 0)*(landmark_uv_proj[:, :, 0] < 2600)*(landmark_uv_proj[:, :, 1] < 2000)*((landmark_uv_proj - landmarks_uv[None]).norm(dim=-1)<1000)*(torch.tensor(landmarks_dict["confidence"])>0.5) )[0]
     print("mean landmark difference : ", ((landmark_uv_proj[0,:] - landmarks_uv)*mask.double().unsqueeze(-1)).abs().mean(dim=0))
-    print(torch.cat([(landmark_uv_proj[0,:] - landmarks_uv), torch.tensor(landmarks_dict["confidence"])[:,None], landmark_uv_proj[0]], dim=-1)[mask][:20])
+    print(torch.cat([(landmark_uv_proj[0,:] - landmarks_uv), torch.tensor(landmarks_dict["confidence"])[:,None], landmark_uv_proj[0], landmarks_uv], dim=-1)[mask][:20])
     ii = ii[mask]#[:-5]
     landmarks_xyz, landmarks_uv, landmark_uv_proj = landmarks_xyz[mask], landmarks_uv[mask], landmark_uv_proj[:, mask]
     # landmarks_xyz, landmarks_uv, landmark_uv_proj = landmarks_xyz[mask][:-5], landmarks_uv[mask][:-5], landmark_uv_proj[:, mask][:,:-5]#, ii[mask][:-5]
@@ -269,7 +277,7 @@ if __name__ == "__main__":
     # landmarks_xyz, landmarks_uv, landmark_uv_proj, ii, confidences = add_proxy_landmarks(landmarks_xyz, landmarks_uv, landmark_uv_proj, ii, intrinsics, poses_gt_eci, confidences)
     print("mean landmark difference : ", ((landmark_uv_proj[0,:] - landmarks_uv)).abs().mean(dim=0))
     ipdb.set_trace()
-    noise_level = 1.0
+    noise_level = 0
     landmarks_uv += (landmark_uv_proj[0, :] - landmarks_uv)*(1-noise_level)
         
     ### Initial guess for poses, velocities
@@ -298,7 +306,6 @@ if __name__ == "__main__":
     landmarks_xyz = landmarks_xyz.unsqueeze(0)
     intrinsics = intrinsics.unsqueeze(0)
     lamda_init = 1e-4
-
     for i in range(num_iters):
         states, velocities, lamda_init = BA(i, states, velocities, imu_meas, landmarks_uv, landmarks_xyz, ii, time_idx, intrinsics, confidences, Sigma, V, lamda_init, poses_gt_eci)
 
@@ -465,7 +472,7 @@ def dynamics_debugging():
     h = 1 # Frequency = 1 Hz
     dt = 1/h
     V = 1e-3
-    Sigma = 1e-3
+    Sigma = 1e-4
     num_iters = 100
     torch.set_printoptions(precision=4, sci_mode=False)
 
@@ -571,7 +578,7 @@ def dynamics_debugging():
         wts_obs = (wts_obs/wts_obs.max())*confidences.unsqueeze(-1).unsqueeze(-1)*0 + 1
         # ipdb.set_trace()
         # r_full = torch.cat([r_obs, r_pred], dim = 1)
-        Sigma = 100*(iter+1)**2#1#00
+        Sigma = 1000*(iter+1)**2#1#00
         V = 1
         dim_base = 6
         dim = 6
