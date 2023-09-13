@@ -5,6 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from glob import glob
 import random
+import ipdb
 
 
 
@@ -26,20 +27,22 @@ def noisy_detections():
         #eci_boxes = convert_latlong_to_cartesian(boxes_centroid[:,1], boxes_centroid[:,0],0)
         #uv = check_projection(pose_test, eci_pos[0,:],intrinsics)
         #print(uv)
+        # ipdb.set_trace()
         detections = []
         positions = traj[:,:3]
         vels = traj[:,4:6]
-        xc,yc,zc = convert_quaternion_to_xyz_orientation(traj[:,6:10], tsamp)
-        camera_vecs = np.concatenate((xc,yc,zc),axis=1)
+        zc,yc,xc = convert_quaternion_to_xyz_orientation(traj[:,6:10], tsamp)
+        camera_vecs = np.concatenate((zc,yc,xc),axis=1)
         #aprint(positions.shape)
         seq = np.concatenate((positions,camera_vecs),axis=1)
         for t in range(len(tsamp)):
             pose = np.concatenate((traj[t,:3],traj[t,6:10]), axis=None)
-            eci_boxes_frame = convert_latlong_to_cartesian(boxes_centroid_sample[:,0], boxes_centroid_sample[:,1],tsamp[t])
-            check_projection_torch(traj, boxes, intrinsics, tsamp[t] )
+            eci_boxes_frame = convert_latlong_to_cartesian(boxes_centroid_sample[:,1], boxes_centroid_sample[:,0],tsamp[t])
+            # check_projection_torch(traj, boxes, intrinsics, tsamp[t] )
             for k in range(len(eci_boxes_frame)):
                 feature = eci_boxes_frame[k]
                 #print(np.linalg.norm(pose[:3]),np.linalg.norm(feature))
+                ipdb.set_trace()
                 uv = check_projection(pose, feature,intrinsics)
                 #print(uv)
                 if uv is not None:
@@ -51,8 +54,8 @@ def noisy_detections():
                     detections.append(detection)
         detections = np.array(detections)
         #print(seq[0,:])
-        np.save("landmarks/detections_%s"%iter, detections)
-        np.save("landmarks/seq_%s"%iter, seq)
+        np.save("landmarks/rand_detections_%s"%iter, detections)
+        np.save("landmarks/rand_seq_%s"%iter, seq)
         #np.savetxt("seq_%s"%iter, seq, fmt='%.16f',)
         print(detections)
 

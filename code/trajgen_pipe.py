@@ -206,6 +206,21 @@ def attitude_step(xk, h):
 
     return xn
 
+REQ = 6378.0
+def get_random_oe():
+    iss_or_polar = np.random.randint(0, 2)
+    deg_options = [51.5, 90]
+    deg_base = deg_options[iss_or_polar]
+    rad_base = np.deg2rad(deg_base)
+    mins = np.array([400 + REQ, 1e-5,  rad_base - 0.1, 0, 0, 0])
+    maxes = np.array([450 + REQ, 1e-3, rad_base + 0.1, 2*np.pi, 2*np.pi, 2*np.pi])
+    
+    # Generate orbital elements within given ranges
+    rands = np.random.rand(len(mins))
+    oes = rands * (maxes - mins) + mins
+    oe = OrbitalElements(*oes)
+    return oe
+
 def generate_new_traj(orbit_type='polar'):
 
     # Use the functions as needed
@@ -213,14 +228,15 @@ def generate_new_traj(orbit_type='polar'):
     # Random initial conditions
 
     
-    if orbit_type == 'polar':
-        # Polar Orbit
-        oe = oe_polar = OrbitalElements(600.0 + 6378.0 + (100 * np.random.rand() - 50), 0.0 + 0.01 * np.random.rand(), (np.pi / 2) + (0.2 * np.random.rand() - 0.1), 2 * np.pi * np.random.rand(), 2 * np.pi * np.random.rand(), 2 * np.pi * np.random.rand())
-        # oe_polar = OrbitalElements(600.0 + 6378.0 + (100 * 0.5 - 50), 0.0 + 0.01 * 0.5, (np.pi / 2) + (0.2 * 0.5 - 0.1), 2 * np.pi * 0.5, 2 * np.pi * 0.5, 2 * np.pi * 0.5)
-    else:
-        # #ISS~ish Orbit
-        oe = oe_iss = OrbitalElements(420.0+6378.0+(100*np.random.rand()-50) ,0.00034+0.01*np.random.rand(), (51.5*np.pi/180)+(0.2*np.random.rand()-0.1), 2*np.pi*np.random.rand(), 2*np.pi*np.random.rand(), 2*np.pi*np.random.rand())
+    # if orbit_type == 'polar':
+    #     # Polar Orbit
+    #     oe = oe_polar = OrbitalElements(600.0 + 6378.0 + (100 * np.random.rand() - 50), 0.0 + 0.01 * np.random.rand(), (np.pi / 2) + (0.2 * np.random.rand() - 0.1), 2 * np.pi * np.random.rand(), 2 * np.pi * np.random.rand(), 2 * np.pi * np.random.rand())
+    #     # oe_polar = OrbitalElements(600.0 + 6378.0 + (100 * 0.5 - 50), 0.0 + 0.01 * 0.5, (np.pi / 2) + (0.2 * 0.5 - 0.1), 2 * np.pi * 0.5, 2 * np.pi * 0.5, 2 * np.pi * 0.5)
+    # else:
+    #     # #ISS~ish Orbit
+    #     oe = oe_iss = OrbitalElements(420.0+6378.0+(100*np.random.rand()-50) ,0.00034+0.01*np.random.rand(), (51.5*np.pi/180)+(0.2*np.random.rand()-0.1), 2*np.pi*np.random.rand(), 2*np.pi*np.random.rand(), 2*np.pi*np.random.rand())
 
+    oe = get_random_oe()
     x0_orbit = oe2eci(oe)
 
     # Simulate for 3 hours (~2 orbits)

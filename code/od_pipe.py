@@ -177,9 +177,9 @@ def read_data(sample_dets=False):
     return orbit, landmarks_dict, intrinsics, time_idx, ii
 
 def read_detections(sample_dets=False):
-    landmarks = np.load("landmarks/detections_2.npy", allow_pickle=True)
+    # landmarks = np.load("landmarks/rand_detections_0.npy", allow_pickle=True)
+    landmarks = np.load("landmarks/detections.npy", allow_pickle=True)
     landmarks[:,0]+=1
-    #landmarks = np.load("landmarks/detections_0.npy", allow_pickle=True)
     landmarks_dict = {}
     landmarks_dict["frame"] = landmarks[:,0]
     landmarks_dict["uv"] = landmarks[:,1:3]
@@ -196,7 +196,7 @@ def read_detections(sample_dets=False):
         orbit = json.load(infile)
     orbit = np.array(orbit)
     orbit[:,0], orbit[:,1], orbit[:,2] = ecef_to_eci(orbit[:,0]/1000, orbit[:,1]/1000, orbit[:,2]/1000, times = np.arange(orbit.shape[0]))
-    #orbit = np.load("landmarks/seq_0.npy")
+    # orbit = np.load("landmarks/rand_seq_0.npy")
     #print(orbit[0,:], "\n", orbit2[0,:])
     #print(orbit.shape, orbit2.shape, landmarks.shape, time_idx.shape)
     #print(time_idx.shape)
@@ -267,6 +267,7 @@ if __name__ == "__main__":
     ### Obtain acceleration from orbital dynamics and angular velocity from IMU
     states_gt_eci = torch.cat([poses_gt_eci, gt_vel_eci[time_idx]], dim=-1)
     landmark_uv_proj = landmark_project(states_gt_eci.unsqueeze(0), landmarks_xyz.unsqueeze(0), intrinsics.unsqueeze(0), ii, jacobian=False)
+    ipdb.set_trace()
     mask = ((landmark_uv_proj[:, :, 0] > 0)*(landmark_uv_proj[:, :, 1] > 0)*(landmark_uv_proj[:, :, 0] < 2600)*(landmark_uv_proj[:, :, 1] < 2000)*((landmark_uv_proj - landmarks_uv[None]).norm(dim=-1)<1000)*(torch.tensor(landmarks_dict["confidence"])>0.5) )[0]
     print("mean landmark difference : ", ((landmark_uv_proj[0,:] - landmarks_uv)*mask.double().unsqueeze(-1)).abs().mean(dim=0))
     print(torch.cat([(landmark_uv_proj[0,:] - landmarks_uv), torch.tensor(landmarks_dict["confidence"])[:,None], landmark_uv_proj[0], landmarks_uv], dim=-1)[mask][:20])
