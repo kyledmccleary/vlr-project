@@ -176,19 +176,31 @@ def read_data(sample_dets=False):
     return orbit, landmarks_dict, intrinsics, time_idx, ii
 
 def read_detections(sample_dets=False):
+    # landmarks = np.load("landmarks/detections_old.npy", allow_pickle=True)
     landmarks = np.load("landmarks/detections.npy", allow_pickle=True)
     landmarks_dict = {}
-    landmarks_dict["frame"] = landmarks[:,0]
+    landmarks_dict["frame"] = landmarks[:,0]+1
     landmarks_dict["uv"] = landmarks[:,1:3]
     landmarks_dict["lonlat"] = landmarks[:,3:5]
     landmarks_dict["confidence"] = landmarks[:,5]
-    time_idx = np.unique(landmarks[:,0]).astype(np.int64)
+    time_idx = np.unique(landmarks[:,0]+1).astype(np.int64)
     ii = []
+    filler_idx = time_idx.min()//100 + 1
+    filler_offset = 0
+    time_idx_new = []
     for i, tidx in enumerate(time_idx):
-        num_points = (landmarks[:,0]==tidx).sum()
-        ii = ii + [i]*num_points
+        # while tidx > filler_idx*100:
+        #     time_idx_new.append(filler_idx*100)
+        #     filler_idx += 1
+        #     filler_offset += 1
+        time_idx_new.append(tidx)
+        num_points = ((landmarks[:,0]+1)==tidx).sum()
+        ii = ii + [i+filler_offset]*num_points
     ii = np.array(ii)
-    with open('landmarks/seq.txt', 'r') as infile:
+    ipdb.set_trace()
+    time_idx = np.array(time_idx_new)
+    # with open('landmarks/seq.txt', 'r') as infile:
+    with open('landmarks/orbit_3hr_noskip.txt', 'r') as infile:
         orbit = json.load(infile)
     orbit = np.array(orbit)
     orbit[:,0], orbit[:,1], orbit[:,2] = ecef_to_eci(orbit[:,0]/1000, orbit[:,1]/1000, orbit[:,2]/1000, times = np.arange(orbit.shape[0]))
@@ -278,13 +290,17 @@ if __name__ == "__main__":
     gt_omega = compute_omega_from_quat(gt_quat_eci_full, dt)
     # velocities = torch.zeros((1, T, N, 3))
     velocities = gt_vel_eci[time_idx].unsqueeze(0).double()
-    ipdb.set_trace()
     omegas = torch.zeros((1, T, N, 3))
     accelerations = torch.zeros((1, T, N, 3))
+    # ipdb.set_trace()
     for i in range(1, T):
         # velocities[:, i-1, :time_idx[i]-time_idx[i-1], :] = gt_vel_eci[time_idx[i-1]:time_idx[i], :].unsqueeze(0).double()
-        omegas[:, i-1, :time_idx[i]-time_idx[i-1], :] = gt_omega[time_idx[i-1]:time_idx[i], :].unsqueeze(0).double()
-        accelerations[:, i-1, :time_idx[i]-time_idx[i-1], :] = gt_acceleration[time_idx[i-1]:time_idx[i], :].unsqueeze(0).double()
+        try:
+            omegas[:, i-1, :time_idx[i]-time_idx[i-1], :] = gt_omega[time_idx[i-1]:time_idx[i], :].unsqueeze(0).double()
+            accelerations[:, i-1, :time_idx[i]-time_idx[i-1], :] = gt_acceleration[time_idx[i-1]:time_idx[i], :].unsqueeze(0).double()
+        except:
+            ipdb.set_trace()
+    ipdb.set_trace()
     imu_meas = torch.cat((omegas, accelerations), dim=-1)   # for now, assume that the IMU gives us the accurate angular velocity and acceleration (we don't use the accelerations, we just use the dynamics)
     position_offset = torch.randn((T, 3))*100
     orientation_offset = torch.randn([T, 3])*0.2

@@ -65,7 +65,7 @@ def propagate_orbit_dynamics(position, velocities, times, dt):
     vel_pred = x_pred[..., 3:]
     return pos_pred, vel_pred
 
-def propagate_rotation_dynamics(quaternion, omegas, times, dt, jac=False):
+def propagate_rotation_dynamics(quaternion, omegas, times, dt):#, jac=False):
     # ipdb.set_trace()
     time_diffs = torch.tensor(times[1:] - times[:-1])
     time_diffs = torch.cat([time_diffs, torch.ones_like(time_diffs[-1:])], dim=0)
@@ -78,10 +78,10 @@ def propagate_rotation_dynamics(quaternion, omegas, times, dt, jac=False):
     # ipdb.set_trace()
     for i in range(max_time_diff):
         quaternion_out = quaternion_multiply(quaternion, quaternion_exp(dt * omegas[:, :, i]))
-        if jac:
-            mask = (i < time_diffs)#[None, :, None, None]
-            jac_i = quaternion_jacobian(quaternion_exp(dt * omegas[:, :, i]))
-            jac_qpred[:, mask] = (jac_i[:,mask][..., None]*jac_qpred[:, mask, None]).sum(dim=-2)
+        # if jac:
+        #     mask = (i < time_diffs)#[None, :, None, None]
+        #     jac_i = quaternion_jacobian(quaternion_exp(dt * omegas[:, :, i]))
+        #     jac_qpred[:, mask] = (jac_i[:,mask][..., None]*jac_qpred[:, mask, None]).sum(dim=-2)
         q_pred.append(quaternion_out)
         quaternion = quaternion_out
     
@@ -250,12 +250,12 @@ def predict(states, imu_meas, times, quat_coeff, vel_coeff, dt=1, jacobian=True)
     N = states.shape[1]
     num_res = (N-1)*6
     GN_quat = False
-    def res_preds(states, jac=False):
+    def res_preds(states):
         position = states[:,:,:3]
         rotation = states[:,:,3:7]
         velocities = states[:,:,7:]
         pos_pred, vel_pred = propagate_orbit_dynamics(position, velocities, times, dt)
-        q_pred, jac_qpred = propagate_rotation_dynamics(rotation, w, times, dt, jac)
+        q_pred, jac_qpred = propagate_rotation_dynamics(rotation, w, times, dt)#, jac)
         jac_ppred = torch.eye(3,3)[None, None].repeat(bsz, N, 1, 1)
         state_pred = torch.cat([pos_pred, q_pred, vel_pred], 2) 
         res_pred = torch.cat([(pos_pred[:,:-1] - position[:,1:]), (vel_pred[:,:-1]-velocities[:,1:])*vel_coeff, quat_coeff*(1 - torch.abs((q_pred[:,:-1]*rotation[:,1:]).sum(dim=-1)).unsqueeze(-1))], 2)
@@ -263,6 +263,12 @@ def predict(states, imu_meas, times, quat_coeff, vel_coeff, dt=1, jacobian=True)
         qt = rotation[:,1:]
         qt1 = rotation[:,:-1]
         return res_pred, state_pred, vel_pred
+    def res_preds_quat_only(states):
+        position = states[:,:,:3]
+        rotation = states[:,:,3:7]
+        velocities = states[:,:,7:]
+        q_pred, jac_qpred = propagate_rotation_dynamics(rotation, w, times, dt)#, jac)
+        return quat_coeff*(1 - torch.abs((q_pred[:,:-1]*rotation[:,1:]).sum(dim=-1)).unsqueeze(-1))
     def res_preds_sum(states):
         states = states.reshape(bsz, -1, 10)
         return res_preds(states)[0].sum(dim=0)[:,:-1].reshape(-1)
@@ -272,18 +278,19 @@ def predict(states, imu_meas, times, quat_coeff, vel_coeff, dt=1, jacobian=True)
     def res_preds_sum_grad(states):
         states = states.reshape(bsz, -1, 10)
         Gq = attitude_jacobian(states[:,:,3:7])
-        res_out = res_preds(states)[0][:,:,-1].sum()
+        res_out = res_preds_quat_only(states).sum()#, quat_out_only=True
         res_grad = torch.autograd.grad(res_out, states, create_graph=True)[0]
         res_grad = torch.cat([res_grad[:, :, :3], (res_grad[:, :, 3:7, None]*Gq).sum(dim=2), res_grad[:, :, 7:]], dim=2)
         return res_grad.reshape(-1)
-    res_pred, pose_pred, vel_pred = res_preds(states, jacobian)
+    res_pred, pose_pred, vel_pred = res_preds(states)#, jacobian)
+    print("finished dynamics propagation")
     if jacobian:
         Gq = attitude_jacobian(states[:,:,3:7])
         Jf = torch.autograd.functional.jacobian(res_preds_sum, states.reshape(bsz, -1), vectorize=True).reshape(bsz, -1, 10)
         GqJ = Gq[:, None].repeat(bsz, num_res, 1, 1, 1).reshape(bsz, -1, 4, 3)
         Jf = torch.cat([Jf[:,:,:3], (Jf[:,:,3:7,None] * GqJ).sum(dim=2), Jf[:,:,7:]], dim=2)
         Jf = Jf.reshape(bsz, num_res, N*9)
-
+        print("finished jacobian computation")
         if GN_quat:
             Jf_quat = torch.autograd.functional.jacobian(res_preds_sum_quat, states.reshape(bsz, -1), vectorize=True).reshape(bsz, -1, 7)
             GqJ = Gq[:, None].repeat(bsz, N-1, 1, 1, 1).reshape(bsz, -1, 4, 3)
@@ -297,6 +304,7 @@ def predict(states, imu_meas, times, quat_coeff, vel_coeff, dt=1, jacobian=True)
             Hdiff = torch.autograd.functional.jacobian(res_preds_sum_grad, states[:, :, :].reshape(bsz, -1), vectorize=True).reshape(bsz, N, 9, N, 10)
             Hq_full = torch.cat([Hdiff[..., :3], (Hdiff[..., 3:7, None]*Gq[:,None,None]).sum(dim=-2), Hdiff[..., 7:]], dim=-1).reshape(bsz, N, 9, N, 9)
             Hq_full = Hq_full.reshape(bsz, N*9, N*9)
+        print("finished hessian computation")
         return res_pred, pose_pred, vel_pred, 0, 0, Jf, Hq_full, qgrad
     
     return res_pred, pose_pred, vel_pred
