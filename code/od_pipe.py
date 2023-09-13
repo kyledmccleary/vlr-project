@@ -179,18 +179,20 @@ def read_detections(sample_dets=False):
     # landmarks = np.load("landmarks/detections_old.npy", allow_pickle=True)
     landmarks = np.load("landmarks/detections.npy", allow_pickle=True)
     landmarks_dict = {}
+    mask = ((landmarks[:,0] <5072)*1.0 + (landmarks[:,0] > 9600)*1.0) > 0
+    landmarks = landmarks[mask]
     landmarks_dict["frame"] = landmarks[:,0]+1
     landmarks_dict["uv"] = landmarks[:,1:3]
     landmarks_dict["lonlat"] = landmarks[:,3:5]
     landmarks_dict["confidence"] = landmarks[:,5]
     time_idx = np.unique(landmarks[:,0]+1).astype(np.int64)
     ii = []
-    filler_idx = time_idx.min()//100 + 1
+    filler_idx = time_idx.min()//2000 + 1
     filler_offset = 0
     time_idx_new = []
     for i, tidx in enumerate(time_idx):
-        # while tidx > filler_idx*100:
-        #     time_idx_new.append(filler_idx*100)
+        # while tidx > filler_idx*2000:
+        #     time_idx_new.append(filler_idx*2000)
         #     filler_idx += 1
         #     filler_offset += 1
         time_idx_new.append(tidx)
@@ -209,9 +211,9 @@ def read_detections(sample_dets=False):
     return orbit, landmarks_dict, intrinsics, time_idx, ii
 
 def remove_elems(mask, gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_quat_eci_full, landmarks_xyz, landmarks_uv, intrinsics, gt_acceleration, ii, time_idx):
-    ii_old = ii[mask][:-5]
+    ii_old = ii[mask]#[:-5]
     import copy
-    ii_new = copy.deepcopy(ii[mask][:-5])
+    ii_new = copy.deepcopy(ii[mask])#[:-5])
     mask_poses = np.unique(ii_old)
     # for i in range(ii_old.max()):
     #     if (i==ii_old).sum() > 2:
@@ -275,13 +277,14 @@ if __name__ == "__main__":
     print("mean landmark difference : ", ((landmark_uv_proj[0,:] - landmarks_uv)*mask.double().unsqueeze(-1)).abs().mean(dim=0))
     print(torch.cat([(landmark_uv_proj[0,:] - landmarks_uv), torch.tensor(landmarks_dict["confidence"])[:,None], landmark_uv_proj[0]], dim=-1)[mask][:20])
     ii = ii[mask]#[:-5]
+    # gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_quat_eci_full, landmarks_xyz, landmarks_uv, intrinsics, gt_acceleration, ii, time_idx, mask = remove_elems(mask, gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_quat_eci_full, landmarks_xyz, landmarks_uv, intrinsics, gt_acceleration, ii, time_idx)
     landmarks_xyz, landmarks_uv, landmark_uv_proj = landmarks_xyz[mask], landmarks_uv[mask], landmark_uv_proj[:, mask]
     # landmarks_xyz, landmarks_uv, landmark_uv_proj = landmarks_xyz[mask][:-5], landmarks_uv[mask][:-5], landmark_uv_proj[:, mask][:,:-5]#, ii[mask][:-5]
     confidences = torch.tensor(landmarks_dict["confidence"])[mask].double()#[:-5]
     # landmarks_xyz, landmarks_uv, landmark_uv_proj, ii, confidences = add_proxy_landmarks(landmarks_xyz, landmarks_uv, landmark_uv_proj, ii, intrinsics, poses_gt_eci, confidences)
     print("mean landmark difference : ", ((landmark_uv_proj[0,:] - landmarks_uv)).abs().mean(dim=0))
     ipdb.set_trace()
-    noise_level = 1.0
+    noise_level = 0.0
     landmarks_uv += (landmark_uv_proj[0, :] - landmarks_uv)*(1-noise_level)
         
     ### Initial guess for poses, velocities
@@ -316,7 +319,7 @@ if __name__ == "__main__":
     lamda_init = 1e-4
 
     for i in range(num_iters):
-        states, velocities, lamda_init = BA(i, states, velocities, imu_meas, landmarks_uv, landmarks_xyz, ii, time_idx, intrinsics, confidences, Sigma, V, lamda_init, poses_gt_eci)
+        states, velocities, lamda_init = BA(i-10, states, velocities, imu_meas, landmarks_uv, landmarks_xyz, ii, time_idx, intrinsics, confidences, Sigma, V, lamda_init, poses_gt_eci, initialize=(i<10))
 
 def attitude_debugging():
     ### Specify hyperparameters
@@ -716,3 +719,4 @@ def dynamics_debugging():
         states = states_new
         if i%5==0:
             ipdb.set_trace()
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                             

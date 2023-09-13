@@ -2,7 +2,7 @@ import torch
 import numpy as np
 from BA.utils import *
 from scipy.spatial import transform
-from torch_scatter import scatter_sum
+from torch_scatter import scatter_sum, scatter_mean
 
 def proj(X, intrinsics):
     """ projection """
@@ -56,6 +56,7 @@ def propagate_orbit_dynamics(position, velocities, times, dt):
     x = torch.cat([position, velocities], dim=-1)
     x_pred = []
     x_shape = x.shape
+    dt = dt*torch.ones_like(x)
     for i in range(max_time_diff):
         x = RK4(x, i, dt)
         x_pred.append(x)
@@ -244,12 +245,16 @@ def predict_vel(poses, velocities, imu_meas, times, quat_coeff, dt=1, jacobian=T
     
     return res_pred, pose_pred, vel_pred
 
-def predict(states, imu_meas, times, quat_coeff, vel_coeff, dt=1, jacobian=True):
+def predict(states, imu_meas, times, quat_coeff, vel_coeff, dt=1, jacobian=True, initialize=False):
     w, a = imu_meas[..., :3], imu_meas[..., 3:]
     bsz = states.shape[0]
     N = states.shape[1]
     num_res = (N-1)*6
     GN_quat = False
+    if initialize:
+        if jacobian:
+            return torch.zeros((bsz, N-1, 6)), 0, 0, 0, 0, torch.zeros((bsz, num_res, N*9)), torch.zeros((bsz, N*9, N*9)), torch.zeros((bsz, N, 9))
+        return torch.zeros((bsz, N-1, 6)), 0, 0
     def res_preds(states):
         position = states[:,:,:3]
         rotation = states[:,:,3:7]
@@ -282,7 +287,8 @@ def predict(states, imu_meas, times, quat_coeff, vel_coeff, dt=1, jacobian=True)
         res_grad = torch.autograd.grad(res_out, states, create_graph=True)[0]
         res_grad = torch.cat([res_grad[:, :, :3], (res_grad[:, :, 3:7, None]*Gq).sum(dim=2), res_grad[:, :, 7:]], dim=2)
         return res_grad.reshape(-1)
-    res_pred, pose_pred, vel_pred = res_preds(states)#, jacobian)
+    with torch.no_grad():
+        res_pred, pose_pred, vel_pred = res_preds(states)#, jacobian)
     print("finished dynamics propagation")
     if jacobian:
         Gq = attitude_jacobian(states[:,:,3:7])
@@ -1011,5 +1017,7 @@ def compute_velocity_from_pos(gt_pos_eci, dt):
 def safe_scatter_add_mat(A, ii, jj, n, m):
     return scatter_sum(A, ii*m + jj, dim=1, dim_size=n*m)
 
-def safe_scatter_add_vec(b, ii, n):
+def safe_scatter_add_vec(b, ii, n, mean=False):
+    if mean:
+        return scatter_mean(b, ii, dim=1, dim_size=n)
     return scatter_sum(b, ii, dim=1, dim_size=n)
