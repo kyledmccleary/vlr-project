@@ -177,15 +177,17 @@ def read_data(sample_dets=False):
 
 def read_detections(sample_dets=False):
     # landmarks = np.load("landmarks/detections_old.npy", allow_pickle=True)
-    landmarks = np.load("landmarks/detections.npy", allow_pickle=True)
+    # landmarks = np.load("landmarks/detections.npy", allow_pickle=True)
+    landmarks = np.load("landmarks/detections_out.npy", allow_pickle=True)
+    landmarks[:,0] += 1
     landmarks_dict = {}
-    mask = ((landmarks[:,0] <5072)*1.0 + (landmarks[:,0] > 9600)*1.0) > 0
-    landmarks = landmarks[mask]
-    landmarks_dict["frame"] = landmarks[:,0]+1
+    # mask = ((landmarks[:,0] <5072)*1.0 + (landmarks[:,0] > 9600)*1.0) > 0
+    # landmarks = landmarks[mask]
+    landmarks_dict["frame"] = landmarks[:,0]
     landmarks_dict["uv"] = landmarks[:,1:3]
     landmarks_dict["lonlat"] = landmarks[:,3:5]
     landmarks_dict["confidence"] = landmarks[:,5]
-    time_idx = np.unique(landmarks[:,0]+1).astype(np.int64)
+    time_idx = np.unique(landmarks[:,0]).astype(np.int64)
     ii = []
     filler_idx = time_idx.min()//2000 + 1
     filler_offset = 0
@@ -196,13 +198,13 @@ def read_detections(sample_dets=False):
         #     filler_idx += 1
         #     filler_offset += 1
         time_idx_new.append(tidx)
-        num_points = ((landmarks[:,0]+1)==tidx).sum()
+        num_points = ((landmarks[:,0])==tidx).sum()
         ii = ii + [i+filler_offset]*num_points
     ii = np.array(ii)
     ipdb.set_trace()
     time_idx = np.array(time_idx_new)
     # with open('landmarks/seq.txt', 'r') as infile:
-    with open('landmarks/orbit_3hr_noskip.txt', 'r') as infile:
+    with open('landmarks/orbit_3hr_noskip2.txt', 'r') as infile:
         orbit = json.load(infile)
     orbit = np.array(orbit)
     orbit[:,0], orbit[:,1], orbit[:,2] = ecef_to_eci(orbit[:,0]/1000, orbit[:,1]/1000, orbit[:,2]/1000, times = np.arange(orbit.shape[0]))
@@ -214,7 +216,8 @@ def remove_elems(mask, gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_qua
     ii_old = ii[mask]#[:-5]
     import copy
     ii_new = copy.deepcopy(ii[mask])#[:-5])
-    mask_poses = np.unique(ii_old)
+    mask_poses, counts = np.unique(ii_old, return_counts=True)
+    # mask_poses = mask_poses[counts>2]
     # for i in range(ii_old.max()):
     #     if (i==ii_old).sum() > 2:
     #         mask_poses.append(i)
@@ -223,7 +226,13 @@ def remove_elems(mask, gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_qua
     #         mask = mask*mask1
             
     for i in range(ii_old.max()):
-        if i not in ii_old:
+        if i not in mask_poses:
+            # if i in ii_old:
+            #     maski = (ii_old != i)
+            #     ii_new = ii_new[maski]
+            #     ii_old = ii_old[maski]
+            #     mask_new = mask.clone()
+            #     mask[mask_new] *= torch.tensor(maski)
             mask1 = ii_old > i
             ii_new[mask1] = ii_new[mask1] - 1
     mask_poses = np.array(mask_poses)
@@ -276,8 +285,8 @@ if __name__ == "__main__":
     mask = ((landmark_uv_proj[:, :, 0] > 0)*(landmark_uv_proj[:, :, 1] > 0)*(landmark_uv_proj[:, :, 0] < 2600)*(landmark_uv_proj[:, :, 1] < 2000)*((landmark_uv_proj - landmarks_uv[None]).norm(dim=-1)<1000)*(torch.tensor(landmarks_dict["confidence"])>0.8) )[0]
     print("mean landmark difference : ", ((landmark_uv_proj[0,:] - landmarks_uv)*mask.double().unsqueeze(-1)).abs().mean(dim=0))
     print(torch.cat([(landmark_uv_proj[0,:] - landmarks_uv), torch.tensor(landmarks_dict["confidence"])[:,None], landmark_uv_proj[0]], dim=-1)[mask][:20])
-    ii = ii[mask]#[:-5]
-    # gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_quat_eci_full, landmarks_xyz, landmarks_uv, intrinsics, gt_acceleration, ii, time_idx, mask = remove_elems(mask, gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_quat_eci_full, landmarks_xyz, landmarks_uv, intrinsics, gt_acceleration, ii, time_idx)
+    # ii = ii[mask]#[:-5]
+    gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_quat_eci_full, landmarks_xyz, landmarks_uv, intrinsics, gt_acceleration, ii, time_idx, mask = remove_elems(mask, gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_quat_eci_full, landmarks_xyz, landmarks_uv, intrinsics, gt_acceleration, ii, time_idx)
     landmarks_xyz, landmarks_uv, landmark_uv_proj = landmarks_xyz[mask], landmarks_uv[mask], landmark_uv_proj[:, mask]
     # landmarks_xyz, landmarks_uv, landmark_uv_proj = landmarks_xyz[mask][:-5], landmarks_uv[mask][:-5], landmark_uv_proj[:, mask][:,:-5]#, ii[mask][:-5]
     confidences = torch.tensor(landmarks_dict["confidence"])[mask].double()#[:-5]
