@@ -315,6 +315,76 @@ def predict(states, imu_meas, times, quat_coeff, vel_coeff, dt=1, jacobian=True,
     
     return res_pred, pose_pred, vel_pred
 
+def predict_gpu(states, imu_meas, times, quat_coeff, vel_coeff, dt=1, jacobian=True, initialize=False):
+    w, a = imu_meas[..., :3].cuda(), imu_meas[..., 3:]
+    bsz = states.shape[0]
+    N = states.shape[1]
+    num_res = (N-1)*6
+    GN_quat = False
+    if initialize:
+        if jacobian:
+            return torch.zeros((bsz, N-1, 6)), 0, 0, 0, 0, torch.zeros((bsz, num_res, N*9)), torch.zeros((bsz, N*9, N*9)), torch.zeros((bsz, N, 9))
+        return torch.zeros((bsz, N-1, 6)), 0, 0
+    def res_preds(states):
+        position = states[:,:,:3]
+        rotation = states[:,:,3:7]
+        velocities = states[:,:,7:]
+        pos_pred, vel_pred = propagate_orbit_dynamics(position, velocities, times, dt)
+        q_pred, jac_qpred = propagate_rotation_dynamics(rotation, w, times, dt)#, jac)
+        jac_ppred = torch.eye(3,3)[None, None].repeat(bsz, N, 1, 1)
+        state_pred = torch.cat([pos_pred, q_pred, vel_pred], 2) 
+        res_pred = torch.cat([(pos_pred[:,:-1] - position[:,1:]), (vel_pred[:,:-1]-velocities[:,1:])*vel_coeff, quat_coeff*(1 - torch.abs((q_pred[:,:-1]*rotation[:,1:]).sum(dim=-1)).unsqueeze(-1))], 2)
+        qthat = q_pred[:,:-1]
+        qt = rotation[:,1:]
+        qt1 = rotation[:,:-1]
+        return res_pred, state_pred, vel_pred
+    def res_preds_quat_only(states):
+        position = states[:,:,:3]
+        rotation = states[:,:,3:7]
+        velocities = states[:,:,7:]
+        q_pred, jac_qpred = propagate_rotation_dynamics(rotation, w, times, dt)#, jac)
+        return quat_coeff*(1 - torch.abs((q_pred[:,:-1]*rotation[:,1:]).sum(dim=-1)).unsqueeze(-1))
+    def res_preds_sum(states):
+        states = states.reshape(bsz, -1, 10)
+        return res_preds(states)[0].sum(dim=0)[:,:-1].reshape(-1)
+    def res_preds_sum_quat(states):
+        states = states.reshape(bsz, -1, 10)
+        return res_preds(states)[0].sum(dim=0)[:,-1].reshape(-1)
+    def res_preds_sum_grad(states):
+        states = states.reshape(bsz, -1, 10)
+        Gq = attitude_jacobian(states[:,:,3:7])
+        res_out = res_preds_quat_only(states).sum()#, quat_out_only=True
+        res_grad = torch.autograd.grad(res_out, states, create_graph=True)[0]
+        res_grad = torch.cat([res_grad[:, :, :3], (res_grad[:, :, 3:7, None]*Gq).sum(dim=2), res_grad[:, :, 7:]], dim=2)
+        return res_grad.reshape(-1)
+    with torch.no_grad():
+        res_pred, pose_pred, vel_pred = res_preds(states.cuda())#, jacobian)
+        res_pred = res_pred.cpu()
+    print("finished dynamics propagation")
+    if jacobian:
+        Gq = attitude_jacobian(states[:,:,3:7])
+        Jf = torch.autograd.functional.jacobian(res_preds_sum, states.reshape(bsz, -1).cuda(), vectorize=True).reshape(bsz, -1, 10).cpu()
+        GqJ = Gq[:, None].repeat(bsz, num_res, 1, 1, 1).reshape(bsz, -1, 4, 3)
+        Jf = torch.cat([Jf[:,:,:3], (Jf[:,:,3:7,None] * GqJ).sum(dim=2), Jf[:,:,7:]], dim=2)
+        Jf = Jf.reshape(bsz, num_res, N*9)
+        print("finished jacobian computation")
+        if GN_quat:
+            Jf_quat = torch.autograd.functional.jacobian(res_preds_sum_quat, states.reshape(bsz, -1), vectorize=True).reshape(bsz, -1, 7)
+            GqJ = Gq[:, None].repeat(bsz, N-1, 1, 1, 1).reshape(bsz, -1, 4, 3)
+            Jf_quat = torch.cat([Jf_quat[:,:,:3], (Jf_quat[:,:,3:,None] * GqJ).sum(dim=2)], dim=2)
+            Jf_quat = Jf_quat.reshape(bsz, N-1, N*6)
+            qgrad = (Jf_quat*res_pred[:, :, -1:]).sum(dim=1).reshape(bsz, N, 6)
+            Hq_full = torch.bmm(Jf_quat.transpose(-1, -2), Jf_quat)
+        else:
+            states.requires_grad_(True)
+            qgrad = res_preds_sum_grad(states.cuda()).reshape(bsz, N, 9).cpu()
+            Hdiff = torch.autograd.functional.jacobian(res_preds_sum_grad, states[:, :, :].reshape(bsz, -1).cuda(), vectorize=True).reshape(bsz, N, 9, N, 10).cpu()
+            Hq_full = torch.cat([Hdiff[..., :3], (Hdiff[..., 3:7, None]*Gq[:,None,None]).sum(dim=-2), Hdiff[..., 7:]], dim=-1).reshape(bsz, N, 9, N, 9)
+            Hq_full = Hq_full.reshape(bsz, N*9, N*9)
+        print("finished hessian computation")
+        return res_pred, pose_pred, vel_pred, 0, 0, Jf, Hq_full, qgrad
+    
+    return res_pred, pose_pred, vel_pred
 
 def predict_orbit(states, imu_meas, times, quat_coeff, vel_coeff, dt=1, jacobian=True):
     w, a = imu_meas[..., :3], imu_meas[..., 3:]

@@ -179,7 +179,10 @@ def read_detections(sample_dets=False):
     # landmarks = np.load("landmarks/detections_old.npy", allow_pickle=True)
     # landmarks = np.load("landmarks/detections.npy", allow_pickle=True)
     landmarks = np.load("landmarks/detections_out.npy", allow_pickle=True)
+    # landmarks = np.load("landmarks/detections_new.npy", allow_pickle=True)
     landmarks[:,0] += 1
+    # mask = (landmarks[:,0] <5072)
+    # landmarks = landmarks[mask]
     landmarks_dict = {}
     # mask = ((landmarks[:,0] <5072)*1.0 + (landmarks[:,0] > 9600)*1.0) > 0
     # landmarks = landmarks[mask]
@@ -189,14 +192,16 @@ def read_detections(sample_dets=False):
     landmarks_dict["confidence"] = landmarks[:,5]
     time_idx = np.unique(landmarks[:,0]).astype(np.int64)
     ii = []
-    filler_idx = time_idx.min()//2000 + 1
+    filler_idx = time_idx.min()//1000 + 1
     filler_offset = 0
     time_idx_new = []
     for i, tidx in enumerate(time_idx):
-        # while tidx > filler_idx*2000:
-        #     time_idx_new.append(filler_idx*2000)
-        #     filler_idx += 1
-        #     filler_offset += 1
+        if tidx == filler_idx*1000:
+            filler_idx += 1
+        while tidx > filler_idx*1000:
+            time_idx_new.append(filler_idx*1000)
+            filler_idx += 1
+            filler_offset += 1
         time_idx_new.append(tidx)
         num_points = ((landmarks[:,0])==tidx).sum()
         ii = ii + [i+filler_offset]*num_points
@@ -217,7 +222,12 @@ def remove_elems(mask, gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_qua
     import copy
     ii_new = copy.deepcopy(ii[mask])#[:-5])
     mask_poses, counts = np.unique(ii_old, return_counts=True)
-    # mask_poses = mask_poses[counts>2]
+    mask_poses = mask_poses[counts>10]
+    mask_poses_onhot = np.zeros(time_idx.shape[0])
+    mask_poses_onhot[mask_poses] = 1
+    knots = time_idx%1000==0
+    mask_poses_onhot = np.logical_or(knots, mask_poses_onhot)
+    mask_poses = np.where(mask_poses_onhot)[0]
     # for i in range(ii_old.max()):
     #     if (i==ii_old).sum() > 2:
     #         mask_poses.append(i)
@@ -225,17 +235,17 @@ def remove_elems(mask, gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_qua
     #         mask1 = (ii_old != i)
     #         mask = mask*mask1
             
-    for i in range(ii_old.max()):
+    for i in range(ii_old.max()+1):
         if i not in mask_poses:
-            # if i in ii_old:
-            #     maski = (ii_old != i)
-            #     ii_new = ii_new[maski]
-            #     ii_old = ii_old[maski]
-            #     mask_new = mask.clone()
-            #     mask[mask_new] *= torch.tensor(maski)
+            if i in ii_old:
+                maski = (ii_old != i)
+                ii_new = ii_new[maski]
+                ii_old = ii_old[maski]
+                mask_new = mask.clone()
+                mask[mask_new] *= torch.tensor(maski)
             mask1 = ii_old > i
             ii_new[mask1] = ii_new[mask1] - 1
-    mask_poses = np.array(mask_poses)
+    mask_poses = mask_poses_onhot#np.array(mask_poses)
     gt_pos_eci = gt_pos_eci[mask_poses]
     poses_gt_eci = poses_gt_eci[mask_poses]
     gt_quat_eci = gt_quat_eci[mask_poses]
@@ -293,7 +303,7 @@ if __name__ == "__main__":
     # landmarks_xyz, landmarks_uv, landmark_uv_proj, ii, confidences = add_proxy_landmarks(landmarks_xyz, landmarks_uv, landmark_uv_proj, ii, intrinsics, poses_gt_eci, confidences)
     print("mean landmark difference : ", ((landmark_uv_proj[0,:] - landmarks_uv)).abs().mean(dim=0))
     ipdb.set_trace()
-    noise_level = 0.0
+    noise_level = 1.0
     landmarks_uv += (landmark_uv_proj[0, :] - landmarks_uv)*(1-noise_level)
         
     ### Initial guess for poses, velocities
