@@ -178,9 +178,9 @@ def read_data(sample_dets=False):
 def read_detections(sample_dets=False):
     # landmarks = np.load("landmarks/detections_old.npy", allow_pickle=True)
     # landmarks = np.load("landmarks/detections.npy", allow_pickle=True)
-    landmarks = np.load("landmarks/detections_out.npy", allow_pickle=True)
+    landmarks = np.load("landmarks/detections3wt.npy", allow_pickle=True)
     # landmarks = np.load("landmarks/detections_new.npy", allow_pickle=True)
-    landmarks[:,0] += 1
+    # landmarks[:,0] += 1
     # mask = (landmarks[:,0] <5072)
     # landmarks = landmarks[mask]
     landmarks_dict = {}
@@ -209,7 +209,7 @@ def read_detections(sample_dets=False):
     ipdb.set_trace()
     time_idx = np.array(time_idx_new)
     # with open('landmarks/seq.txt', 'r') as infile:
-    with open('landmarks/orbit_3hr_noskip2.txt', 'r') as infile:
+    with open('landmarks/orbit_3hr_noskip3.txt', 'r') as infile:
         orbit = json.load(infile)
     orbit = np.array(orbit)
     orbit[:,0], orbit[:,1], orbit[:,2] = ecef_to_eci(orbit[:,0]/1000, orbit[:,1]/1000, orbit[:,2]/1000, times = np.arange(orbit.shape[0]))
@@ -222,7 +222,7 @@ def remove_elems(mask, gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_qua
     import copy
     ii_new = copy.deepcopy(ii[mask])#[:-5])
     mask_poses, counts = np.unique(ii_old, return_counts=True)
-    mask_poses = mask_poses[counts>10]
+    mask_poses = mask_poses[counts>12]
     mask_poses_onhot = np.zeros(time_idx.shape[0])
     mask_poses_onhot[mask_poses] = 1
     knots = time_idx%1000==0
@@ -292,20 +292,23 @@ if __name__ == "__main__":
     ### Obtain acceleration from orbital dynamics and angular velocity from IMU
     states_gt_eci = torch.cat([poses_gt_eci, gt_vel_eci[time_idx]], dim=-1)
     landmark_uv_proj = landmark_project(states_gt_eci.unsqueeze(0), landmarks_xyz.unsqueeze(0), intrinsics.unsqueeze(0), ii, jacobian=False)
-    mask = ((landmark_uv_proj[:, :, 0] > 0)*(landmark_uv_proj[:, :, 1] > 0)*(landmark_uv_proj[:, :, 0] < 2600)*(landmark_uv_proj[:, :, 1] < 2000)*((landmark_uv_proj - landmarks_uv[None]).norm(dim=-1)<1000)*(torch.tensor(landmarks_dict["confidence"])>0.8) )[0]
-    print("mean landmark difference : ", ((landmark_uv_proj[0,:] - landmarks_uv)*mask.double().unsqueeze(-1)).abs().mean(dim=0))
-    print(torch.cat([(landmark_uv_proj[0,:] - landmarks_uv), torch.tensor(landmarks_dict["confidence"])[:,None], landmark_uv_proj[0]], dim=-1)[mask][:20])
+    #mask = ((landmark_uv_proj[:, :, 0] > 0)*(landmark_uv_proj[:, :, 1] > 0)*(landmark_uv_proj[:, :, 0] < 2600)*(landmark_uv_proj[:, :, 1] < 2000)*((landmark_uv_proj - landmarks_uv[None]).norm(dim=-1)<1000)*(torch.tensor(landmarks_dict["confidence"])>0.8) )[0]
+    #print("mean landmark difference : ", ((landmark_uv_proj[0,:] - landmarks_uv)*mask.double().unsqueeze(-1)).abs().mean(dim=0))
+    # print(torch.cat([(landmark_uv_proj[0,:] - landmarks_uv), torch.tensor(landmarks_dict["confidence"])[:,None], landmark_uv_proj[0]], dim=-1)[mask][:20])
     # ii = ii[mask]#[:-5]
-    gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_quat_eci_full, landmarks_xyz, landmarks_uv, intrinsics, gt_acceleration, ii, time_idx, mask = remove_elems(mask, gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_quat_eci_full, landmarks_xyz, landmarks_uv, intrinsics, gt_acceleration, ii, time_idx)
-    landmarks_xyz, landmarks_uv, landmark_uv_proj = landmarks_xyz[mask], landmarks_uv[mask], landmark_uv_proj[:, mask]
+    #gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_quat_eci_full, landmarks_xyz, landmarks_uv, intrinsics, gt_acceleration, ii, time_idx, mask = remove_elems(mask, gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_quat_eci_full, landmarks_xyz, landmarks_uv, intrinsics, gt_acceleration, ii, time_idx)
+    #landmarks_xyz, landmarks_uv, landmark_uv_proj = landmarks_xyz[mask], landmarks_uv[mask], landmark_uv_proj[:, mask]
     # landmarks_xyz, landmarks_uv, landmark_uv_proj = landmarks_xyz[mask][:-5], landmarks_uv[mask][:-5], landmark_uv_proj[:, mask][:,:-5]#, ii[mask][:-5]
-    confidences = torch.tensor(landmarks_dict["confidence"])[mask].double()#[:-5]
+    # confidences = torch.tensor(landmarks_dict["confidence"])[mask].double()#[:-5]
+    confidences = torch.tensor(landmarks_dict["confidence"]).double()#[:-5]
     # landmarks_xyz, landmarks_uv, landmark_uv_proj, ii, confidences = add_proxy_landmarks(landmarks_xyz, landmarks_uv, landmark_uv_proj, ii, intrinsics, poses_gt_eci, confidences)
     print("mean landmark difference : ", ((landmark_uv_proj[0,:] - landmarks_uv)).abs().mean(dim=0))
     ipdb.set_trace()
     noise_level = 1.0
     landmarks_uv += (landmark_uv_proj[0, :] - landmarks_uv)*(1-noise_level)
-        
+    noise_variance = 0
+    landmarks_uv = landmarks_uv + noise_variance * torch.round(torch.rand_like(landmarks_uv))
+    ipdb.set_trace()
     ### Initial guess for poses, velocities
     T = len(gt_pos_eci)
     N  = max(time_idx[1:] - time_idx[:-1])
