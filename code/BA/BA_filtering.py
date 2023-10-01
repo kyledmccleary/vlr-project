@@ -13,14 +13,17 @@ def BA(iter, states, velocities, imu_meas, landmarks, landmarks_xyz, ii, time_id
 
 	bsz = states.shape[0]
 	landmark_est, Jg = landmark_project(states, landmarks_xyz, intrinsics, ii, jacobian=True)
-	r_pred, pose_pred, vel_pred, Ji, Ji_1, Jf, Hq, qgrad = predict(states, imu_meas, time_idx, quat_coeff, vel_coeff, jacobian=True, initialize=initialize) 
+	if torch.cuda.is_available():
+		r_pred, pose_pred, vel_pred, Ji, Ji_1, Jf, Hq, qgrad = predict_gpu(states, imu_meas, time_idx, quat_coeff, vel_coeff, jacobian=True, initialize=initialize) 
+	else:
+		r_pred, pose_pred, vel_pred, Ji, Ji_1, Jf, Hq, qgrad = predict(states, imu_meas, time_idx, quat_coeff, vel_coeff, jacobian=True, initialize=initialize)
 	
 	r_obs = (landmarks - landmark_est)
 	alpha = min(max(1 - (2*(iter/5) - 1), 1), 2)
 	c_obs = r_obs.abs().median()
 	wts_obs = (((((r_obs/c_obs)**2)/abs(alpha-2) + 1)**(alpha/2 - 1)) / ((c_obs)**2)).mean(dim=-1).unsqueeze(-1).unsqueeze(-1)[0]
 	wts_obs = (wts_obs/wts_obs.max())*confidences.unsqueeze(-1).unsqueeze(-1)#*0 + 1
-	Sigma = min(100*(iter+1)**2, 10000)
+	Sigma = min(10000*(iter+1)**2, 1000000)
 	V = 1
 	dim_base = 9
 	dim = 9
@@ -56,7 +59,10 @@ def BA(iter, states, velocities, imu_meas, landmarks, landmarks_xyz, ii, time_id
 		rotation = rotation / torch.norm(rotation, dim=2, keepdim=True)
 		states_new = torch.cat([position, rotation, vels], 2)
 		landmark_est = landmark_project(states_new, landmarks_xyz, intrinsics, ii, jacobian=False)
-		r_pred1, _, _ = predict(states_new, imu_meas, time_idx, quat_coeff, vel_coeff, jacobian=False, initialize=initialize) 
+		if torch.cuda.is_available():
+			r_pred1, _, _ = predict_gpu(states_new, imu_meas, time_idx, quat_coeff, vel_coeff, jacobian=False, initialize=initialize) 
+		else:
+			r_pred1, _, _ = predict(states_new, imu_meas, time_idx, quat_coeff, vel_coeff, jacobian=False, initialize=initialize)
 		r_obs1 = (landmarks - landmark_est)*wts_obs[None, :, 0]
 		r_pred1 = r_pred1[:, :,  :dim].reshape(bsz, -1) * np.sqrt(Sigma)
 		r_obs1 = r_obs1.reshape(bsz, -1)
@@ -77,7 +83,7 @@ def BA(iter, states, velocities, imu_meas, landmarks, landmarks_xyz, ii, time_id
 	print("alpha: ", alpha, r_pred.abs().mean()* np.sqrt(Sigma), r_obs.abs().mean())
 	print("final quat: ", (states_new[0,:, 3:7]-poses_gt_eci[:, 3:]).abs().mean(dim=0), (1 - torch.abs((states_new[0,:, 3:7] * poses_gt_eci[:, 3:]).sum(dim=-1))).mean())
 	print("init quat: ", (states[0,:, 3:7] - poses_gt_eci[:, 3:]).abs().mean(dim=0), (1 - torch.abs((states[0,:, 3:7] * poses_gt_eci[:, 3:]).sum(dim=-1))).mean())
-	print("final pos: ", (states_new[0,:, :3]-poses_gt_eci[:, :3]).abs().mean(dim=0))
+	print("final pos: ", (states_new[0,:, :3]-poses_gt_eci[:, :3]).abs().mean(dim=0), (states_new[0,:, :3]-poses_gt_eci[:, :3]).abs().mean(dim=0).norm().item())
 	print("init pos: ", (states[0,:, :3] - poses_gt_eci[:, :3]).abs().mean(dim=0))
 	print("final vels: ", (states_new[0,:, 7:]-velocities[0]).abs().mean(dim=0))
 	print("init vels: ", (states[0,:, 7:] - velocities[0]).abs().mean(dim=0))
