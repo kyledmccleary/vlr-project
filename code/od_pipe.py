@@ -217,6 +217,17 @@ def read_detections(sample_dets=False):
     intrinsics = np.genfromtxt("landmarks/intrinsics.csv", delimiter=',')[0] #  might have to specify manually
     return orbit, landmarks_dict, intrinsics, time_idx, ii
 
+def separate_batches(landmarks_dict):
+    idx = np.unique(landmarks_dict["frame"])
+    landmarks_dict_new = {}
+    for i in idx:
+        mask = landmarks_dict["frame"] == i
+        landmarks_dict_new[i] = {}
+        landmarks_dict_new[i]["uv"] = landmarks_dict["uv"][mask]
+        landmarks_dict_new[i]["lonlat"] = landmarks_dict["lonlat"][mask]
+        landmarks_dict_new[i]["confidence"] = landmarks_dict["confidence"][mask]
+    return landmarks_dict_new
+
 def remove_elems(mask, gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_quat_eci_full, landmarks_xyz, landmarks_uv, intrinsics, gt_acceleration, ii, time_idx):
     ii_old = ii[mask]#[:-5]
     import copy
