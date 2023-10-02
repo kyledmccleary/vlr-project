@@ -66,6 +66,44 @@ def propagate_orbit_dynamics(position, velocities, times, dt):
     vel_pred = x_pred[..., 3:]
     return pos_pred, vel_pred
 
+def propagate_orbit_dynamics_init(position, velocities, duration, dt, only_end=False):
+    x = torch.cat([position, velocities], dim=-1)
+    x_pred = [x]
+    dt = dt*torch.ones_like(x)
+    for i in range(duration):
+        x = RK4(x, i, dt)
+        x_pred.append(x)
+    x_pred = torch.stack(x_pred, dim=-2)
+    if only_end:
+        x_pred = x_pred[..., -1, :]
+    pos_pred = x_pred[..., :3]
+    vel_pred = x_pred[..., 3:]
+    return pos_pred, vel_pred
+
+def propagate_rotation_dynamics_init(quaternion, omegas, duration, dt, only_end=False):
+    q_pred = [quaternion]
+    for i in range(duration):
+        quaternion_out = quaternion_multiply(quaternion, quaternion_exp(dt * omegas[:, i]))
+        q_pred.append(quaternion_out)
+        quaternion = quaternion_out
+    q_pred = torch.stack(q_pred, dim=-2)
+    if only_end:
+        q_pred = q_pred[..., -1, :]
+    return q_pred
+
+def propagate_dynamics_init(states, velocities, omega, tdiff, duration, dt):
+    position, rotation = states[:,:3], states[:,3:7]
+    w = omega#[..., :3]#, imu_meas[..., 3:]
+
+    position_beg, velocities_beg = propagate_orbit_dynamics_init(position, velocities, tdiff, dt, only_end=True)
+    quat_beg = propagate_rotation_dynamics_init(rotation, w[:, :tdiff, :], tdiff, dt, only_end=True)
+
+    position_t, velocities_t = propagate_orbit_dynamics_init(position_beg, velocities_beg, duration, dt, only_end=False)
+    quat_t = propagate_rotation_dynamics_init(quat_beg, w[:, tdiff:, :], duration, dt, only_end=False)
+
+    states_t = torch.cat([position_t, quat_t, velocities_t], dim=-1)
+    return states_t, velocities_t
+
 def propagate_rotation_dynamics(quaternion, omegas, times, dt):#, jac=False):
     # ipdb.set_trace()
     time_diffs = torch.tensor(times[1:] - times[:-1])

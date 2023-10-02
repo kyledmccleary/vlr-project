@@ -190,6 +190,7 @@ def read_detections(sample_dets=False):
     # landmarks = landmarks[mask]
     landmarks_dict = {}
     # mask = ((landmarks[:,0] <5072)*1.0 + (landmarks[:,0] > 9600)*1.0) > 0
+    # mask = landmarks[:,0] <5672
     # landmarks = landmarks[mask]
     landmarks_dict["frame"] = landmarks[:,0]
     landmarks_dict["uv"] = landmarks[:,1:3]
@@ -201,12 +202,12 @@ def read_detections(sample_dets=False):
     filler_offset = 0
     time_idx_new = []
     for i, tidx in enumerate(time_idx):
-        if tidx == filler_idx*1000:
-            filler_idx += 1
-        while tidx > filler_idx*1000:
-            time_idx_new.append(filler_idx*1000)
-            filler_idx += 1
-            filler_offset += 1
+        # if tidx == filler_idx*1000:
+        #     filler_idx += 1
+        # while tidx > filler_idx*1000:
+        #     time_idx_new.append(filler_idx*1000)
+        #     filler_idx += 1
+        #     filler_offset += 1
         time_idx_new.append(tidx)
         num_points = ((landmarks[:,0])==tidx).sum()
         ii = ii + [i+filler_offset]*num_points
@@ -281,7 +282,8 @@ def seeding(seed):
     torch.manual_seed(seed)
     np.random.seed(seed)    
 
-if __name__ == "__main__":
+
+def full_batch_optimization():
     ### Specify hyperparameters
     seeding(0)
     h = 1 # Frequency = 1 Hz
@@ -750,10 +752,11 @@ def dynamics_debugging():
             ipdb.set_trace()
 
 
-def identify_next_batch(ii, i, t):
+def identify_next_batch(ii, time_idx, i, t):
     for j in range(i+1, len(ii)):
-        if ii[j] - ii[j-1] > 200:
-            return ii[j-1]+1, j
+        if time_idx[ii[j]] - time_idx[ii[j-1]] > 200:
+            return ii[j-1]+1, j, False
+    return ii[-1]+1, len(ii), True
 
 
 def streaming_debugging():
@@ -763,7 +766,7 @@ def streaming_debugging():
     dt = 1/h
     V = 1e-3
     Sigma = 1e-3
-    num_iters = 100
+    num_iters = 20
     torch.set_printoptions(precision=4, sci_mode=False)
 
     ### Read data 
@@ -822,16 +825,46 @@ def streaming_debugging():
 
     t = 0
     i = 0
-    while t<T:
+    seq_end = False
+    patch_id = 0
+    ipdb.set_trace()
+    while not seq_end:
         t_init = t
         i_init = i
-        t_final, i_final = identify_next_batch(ii, i, t)
+        t_final, i_final, seq_end = identify_next_batch(ii, time_idx, i, t)
         t = t_final
-        # states = states[:,t_init:t_final]
-        # velocities = velocities[:,t_init:t_final]
-        # imu_meas = imu_meas[:,t_init:t_final]
+        i = i_final
+        if patch_id == 0:
+            states_t = states[:,t_init:t_final]
+            velocities_t = velocities[:,t_init:t_final]
+            imu_meas_t = imu_meas[:,t_init:t_final]
+            intrinsics_t = intrinsics[:,t_init:t_final]
+            ii_t = ii[i_init:i_final] - ii[i_init]
+            time_idx_t = time_idx[t_init:t_final]
+            poses_gt_eci_t = poses_gt_eci[t_init:t_final]
+        else:
+            omega = gt_omega[time_idx[t_init-1]:time_idx[t_final-1]].unsqueeze(0).double()
+            tdiff = time_idx[t_init] - time_idx[t_init-1]
+            duration = time_idx[t_final-1] - time_idx[t_init] #+ 1
+            states_t, velocities_t = propagate_dynamics_init(states_t[:, -1], velocities_t[:,-1], omega, tdiff, duration, 1)
+            imu_meas_t = imu_meas[:,t_init:t_final]
+            intrinsics_t = intrinsics[:,t_init:t_final]
+            ii_t = ii[i_init:i_final] - ii[i_init]
+            time_idx_t = time_idx[t_init:t_final]
+            poses_gt_eci_t = poses_gt_eci[t_init:t_final]
+            states_t, velocities_t = states_t[:,time_idx_t - time_idx_t[0]], velocities_t[:,time_idx_t - time_idx_t[0]]
+        ipdb.set_trace()
+        # confidences_t = confidences[i_init:i_final]
         lamda_init_t = lamda_init
-        for i in range(num_iters):
-            states, velocities, lamda_init_t = BA(i-10, states, velocities, imu_meas, landmarks_uv[:, i_init:i_final], landmarks_xyz[:, i_init:i_final], ii[:, i_init:i_final], time_idx, intrinsics, confidences[:, i_init:i_final], Sigma, V, lamda_init_t, poses_gt_eci, initialize=(i<10))        
-        
-        
+        for iter in range(num_iters):
+            if patch_id == 0:
+                states_t, velocities_t, lamda_init_t = BA(iter-10, states_t, velocities_t, imu_meas_t, landmarks_uv[:, i_init:i_final], landmarks_xyz[:, i_init:i_final], ii_t, time_idx_t, intrinsics_t, confidences[i_init:i_final], Sigma, V, lamda_init_t, poses_gt_eci_t, initialize=(iter<10))
+            else:
+                states_t, velocities_t, lamda_init_t = BA(iter, states_t, velocities_t, imu_meas_t, landmarks_uv[:, i_init:i_final], landmarks_xyz[:, i_init:i_final], ii_t, time_idx_t, intrinsics_t, confidences[i_init:i_final], Sigma, V, lamda_init_t, poses_gt_eci_t, initialize=False)
+        patch_id += 1
+        ipdb.set_trace()
+
+
+if __name__ == "__main__":
+    # full_batch_optimization()
+    streaming_debugging()
