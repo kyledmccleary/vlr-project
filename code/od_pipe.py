@@ -856,11 +856,13 @@ def streaming_debugging():
         ipdb.set_trace()
         # confidences_t = confidences[i_init:i_final]
         lamda_init_t = lamda_init
+        states_t_prior = states_t.clone()
+        velocities_t_prior = velocities_t.clone()
         for iter in range(num_iters):
             if patch_id == 0:
                 states_t, velocities_t, lamda_init_t = BA(iter-10, states_t, velocities_t, imu_meas_t, landmarks_uv[:, i_init:i_final], landmarks_xyz[:, i_init:i_final], ii_t, time_idx_t, intrinsics_t, confidences[i_init:i_final], Sigma, V, lamda_init_t, poses_gt_eci_t, initialize=(iter<10))
             else:
-                states_t, velocities_t, lamda_init_t = BA(iter, states_t, velocities_t, imu_meas_t, landmarks_uv[:, i_init:i_final], landmarks_xyz[:, i_init:i_final], ii_t, time_idx_t, intrinsics_t, confidences[i_init:i_final], Sigma, V, lamda_init_t, poses_gt_eci_t, initialize=False)
+                states_t, velocities_t, lamda_init_t = BA_reg(iter, states_t, velocities_t, states_t_prior, velocities_t_prior, imu_meas_t, landmarks_uv[:, i_init:i_final], landmarks_xyz[:, i_init:i_final], ii_t, time_idx_t, intrinsics_t, confidences[i_init:i_final], Sigma, V, lamda_init_t, poses_gt_eci_t, initialize=False, use_reg=True)
         patch_id += 1
         ipdb.set_trace()
 
