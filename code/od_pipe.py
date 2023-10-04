@@ -866,5 +866,5 @@ def streaming_debugging():
 
 
 if __name__ == "__main__":
-    # full_batch_optimization()
+    #full_batch_optimization()
     streaming_debugging()

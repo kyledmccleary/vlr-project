@@ -10,7 +10,8 @@ def BA(iter, states, velocities, imu_meas, landmarks, landmarks_xyz, ii, time_id
 	intrinsics = intrinsics.double()
 	quat_coeff = 100 #+ min(iter*10, 900)
 	vel_coeff = 100#00
-
+	states_prop	= states.clone()#saving propagated states for regularization
+	velocities_prop = velocities.clone()
 	bsz = states.shape[0]
 	landmark_est, Jg = landmark_project(states, landmarks_xyz, intrinsics, ii, jacobian=True)
 	if torch.cuda.is_available():
@@ -63,6 +64,9 @@ def BA(iter, states, velocities, imu_meas, landmarks, landmarks_xyz, ii, time_id
 			r_pred1, _, _ = predict_gpu(states_new, imu_meas, time_idx, quat_coeff, vel_coeff, jacobian=False, initialize=initialize) 
 		else:
 			r_pred1, _, _ = predict(states_new, imu_meas, time_idx, quat_coeff, vel_coeff, jacobian=False, initialize=initialize)
+		r_reg,_,_ = res_reg(states_new, states_prop, vel_coeff, quat_coeff) ##Add regularization
+		r_reg = r_reg[:, :,  :dim].reshape(bsz, -1) * np.sqrt(Sigma) #Sum regularization over all frames
+		r_pred1 = r_pred1 + r_reg
 		r_obs1 = (landmarks - landmark_est)*wts_obs[None, :, 0]
 		r_pred1 = r_pred1[:, :,  :dim].reshape(bsz, -1) * np.sqrt(Sigma)
 		r_obs1 = r_obs1.reshape(bsz, -1)

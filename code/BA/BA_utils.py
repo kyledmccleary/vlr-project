@@ -353,6 +353,23 @@ def predict(states, imu_meas, times, quat_coeff, vel_coeff, dt=1, jacobian=True,
     
     return res_pred, pose_pred, vel_pred
 
+def res_reg(states,prop_states,vel_coeff,quat_coeff):
+        position = states[:,:,:3]
+        rotation = states[:,:,3:7]
+        velocities = states[:,:,7:]
+        #pos_pred, vel_pred = propagate_orbit_dynamics(position, velocities, times, dt)
+        #q_pred, jac_qpred = propagate_rotation_dynamics(rotation, w, times, dt)#, jac)
+        #jac_ppred = torch.eye(3,3)[None, None].repeat(bsz, N, 1, 1)
+        pos_pred = prop_states[:,:,:3]
+        vel_pred = prop_states[:,:,7:]
+        q_pred = prop_states[:,:,3:7]
+        state_pred = torch.cat([pos_pred, q_pred, vel_pred], 2) 
+        res_pred = torch.cat([(pos_pred[:,:-1] - position[:,1:]), (vel_pred[:,:-1]-velocities[:,1:])*vel_coeff, quat_coeff*(1 - torch.abs((q_pred[:,:-1]*rotation[:,1:]).sum(dim=-1)).unsqueeze(-1))], 2)
+        qthat = q_pred[:,:-1]
+        qt = rotation[:,1:]
+        qt1 = rotation[:,:-1]
+        return res_pred, state_pred, vel_pred
+
 def predict_gpu(states, imu_meas, times, quat_coeff, vel_coeff, dt=1, jacobian=True, initialize=False):
     w, a = imu_meas[..., :3].cuda(), imu_meas[..., 3:]
     bsz = states.shape[0]
