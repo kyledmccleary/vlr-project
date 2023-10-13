@@ -1,7 +1,7 @@
 import torch
 # from lietorch.groups import SO3, SE3
 from BA.BA_utils import *
-from BA.BA_filtering import BA
+from BA.BA_filtering import BA, BA_reg
 from BA.utils import *
 import numpy as np
 import matplotlib.pyplot as plt
@@ -212,7 +212,7 @@ def read_detections(sample_dets=False):
         num_points = ((landmarks[:,0])==tidx).sum()
         ii = ii + [i+filler_offset]*num_points
     ii = np.array(ii)
-    ipdb.set_trace()
+    # ipdb.set_trace()
     time_idx = np.array(time_idx_new)
     # with open('landmarks/seq.txt', 'r') as infile:
     with open(f'landmarks/sequences/orbit_3hr_noskip{id}.txt', 'r') as infile:
@@ -808,7 +808,7 @@ def streaming_debugging():
             accelerations[:, i-1, :time_idx[i]-time_idx[i-1], :] = gt_acceleration[time_idx[i-1]:time_idx[i], :].unsqueeze(0).double()
         except:
             ipdb.set_trace()
-    ipdb.set_trace()
+    # ipdb.set_trace()
     imu_meas = torch.cat((omegas, accelerations), dim=-1)   # for now, assume that the IMU gives us the accurate angular velocity and acceleration (we don't use the accelerations, we just use the dynamics)
     position_offset = torch.randn((T, 3))*100
     orientation_offset = torch.randn([T, 3])*0.2
@@ -827,7 +827,7 @@ def streaming_debugging():
     i = 0
     seq_end = False
     patch_id = 0
-    ipdb.set_trace()
+    # ipdb.set_trace()
     while not seq_end:
         t_init = t
         i_init = i
@@ -854,6 +854,7 @@ def streaming_debugging():
             poses_gt_eci_t = poses_gt_eci[t_init:t_final]
             states_t, velocities_t = states_t[:,time_idx_t - time_idx_t[0]], velocities_t[:,time_idx_t - time_idx_t[0]]
         ipdb.set_trace()
+        print("interval : ", t_init, t_final, time_idx_t)
         # confidences_t = confidences[i_init:i_final]
         lamda_init_t = lamda_init
         states_t_prior = states_t.clone()

@@ -427,6 +427,7 @@ def predict_gpu(states, imu_meas, times, quat_coeff, vel_coeff, dt=1, jacobian=T
 def prior_gpu(states, prop_states, vel_coeff, quat_coeff, jacobian=True, initialize=False):
     bsz = states.shape[0]
     N = states.shape[1]
+    prop_states = prop_states.cuda()
     num_res = (N)*6
     GN_quat = False
     if initialize:
@@ -448,10 +449,10 @@ def prior_gpu(states, prop_states, vel_coeff, quat_coeff, jacobian=True, initial
         return quat_coeff*(1 - torch.abs((q_prop*rotation).sum(dim=-1)).unsqueeze(-1))
     def res_reg_sum(states):
         states = states.reshape(bsz, -1, 10)
-        return res_reg(states)[0].sum(dim=0)[:,:-1].reshape(-1)
+        return res_reg(states).sum(dim=0)[:,:-1].reshape(-1)
     def res_reg_sum_quat(states):
         states = states.reshape(bsz, -1, 10)
-        return res_reg(states)[0].sum(dim=0)[:,-1].reshape(-1)
+        return res_reg(states).sum(dim=0)[:,-1].reshape(-1)
     def res_reg_sum_grad(states):
         states = states.reshape(bsz, -1, 10)
         Gq = attitude_jacobian(states[:,:,3:7])
