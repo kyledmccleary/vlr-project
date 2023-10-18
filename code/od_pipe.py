@@ -846,13 +846,14 @@ def streaming_debugging():
             omega = gt_omega[time_idx[t_init-1]:time_idx[t_final-1]].unsqueeze(0).double()
             tdiff = time_idx[t_init] - time_idx[t_init-1]
             duration = time_idx[t_final-1] - time_idx[t_init] #+ 1
-            states_t, velocities_t = propagate_dynamics_init(states_t[:, -1], velocities_t[:,-1], omega, tdiff, duration, 1)
+            states_t, velocities_t, hessian_state_t, hessian_rot_t = propagate_dynamics_cov_init(states_t[:, -1], velocities_t[:,-1], last_hessian, omega, tdiff, duration, 1)
             imu_meas_t = imu_meas[:,t_init:t_final]
             intrinsics_t = intrinsics[:,t_init:t_final]
             ii_t = ii[i_init:i_final] - ii[i_init]
             time_idx_t = time_idx[t_init:t_final]
             poses_gt_eci_t = poses_gt_eci[t_init:t_final]
             states_t, velocities_t = states_t[:,time_idx_t - time_idx_t[0]], velocities_t[:,time_idx_t - time_idx_t[0]]
+            hessian_rot_t, hessian_state_t = hessian_rot_t[:,time_idx_t - time_idx_t[0]], hessian_state_t[:,time_idx_t - time_idx_t[0]]
         ipdb.set_trace()
         print("interval : ", t_init, t_final, time_idx_t)
         # confidences_t = confidences[i_init:i_final]
@@ -861,9 +862,9 @@ def streaming_debugging():
         velocities_t_prior = velocities_t.clone()
         for iter in range(num_iters):
             if patch_id == 0:
-                states_t, velocities_t, lamda_init_t = BA(iter-10, states_t, velocities_t, imu_meas_t, landmarks_uv[:, i_init:i_final], landmarks_xyz[:, i_init:i_final], ii_t, time_idx_t, intrinsics_t, confidences[i_init:i_final], Sigma, V, lamda_init_t, poses_gt_eci_t, initialize=(iter<10))
+                states_t, velocities_t, lamda_init_t, last_hessian = BA(iter-10, states_t, velocities_t, imu_meas_t, landmarks_uv[:, i_init:i_final], landmarks_xyz[:, i_init:i_final], ii_t, time_idx_t, intrinsics_t, confidences[i_init:i_final], Sigma, V, lamda_init_t, poses_gt_eci_t, initialize=(iter<10))
             else:
-                states_t, velocities_t, lamda_init_t = BA_reg(iter, states_t, velocities_t, states_t_prior, velocities_t_prior, imu_meas_t, landmarks_uv[:, i_init:i_final], landmarks_xyz[:, i_init:i_final], ii_t, time_idx_t, intrinsics_t, confidences[i_init:i_final], Sigma, V, lamda_init_t, poses_gt_eci_t, initialize=False, use_reg=True)
+                states_t, velocities_t, lamda_init_t, last_hessian = BA_reg(iter, states_t, velocities_t, states_t_prior, velocities_t_prior, hessian_state_t, hessian_rot_t, imu_meas_t, landmarks_uv[:, i_init:i_final], landmarks_xyz[:, i_init:i_final], ii_t, time_idx_t, intrinsics_t, confidences[i_init:i_final], Sigma, V, lamda_init_t, poses_gt_eci_t, initialize=False, use_reg=True)
         patch_id += 1
         ipdb.set_trace()
 

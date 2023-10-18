@@ -93,9 +93,10 @@ def BA(iter, states, velocities, imu_meas, landmarks, landmarks_xyz, ii, time_id
 	# 	print((states_new[0,:, :3]-poses_gt_eci[:, :3]).abs().norm(dim=-1).detach().numpy())
 	# 	print("r_pred :", r_pred[0,:].abs().mean(dim=-1))
 	# 	print(r_obs_frame.reshape(-1).detach().numpy())
-	return states_new, velocities, lamda_init
+	last_hessian = JTwJ[:, -dim:, -dim:]
+	return states_new, velocities, lamda_init, last_hessian
 
-def BA_reg(iter, states, velocities, states_prior, velocity_prior, imu_meas, landmarks, landmarks_xyz, ii, time_idx, intrinsics, confidences, Sigma, V, lamda_init, poses_gt_eci, initialize=False, use_reg=True):
+def BA_reg(iter, states, velocities, states_prior, velocity_prior, hessian_state_t, hessian_rot_t, imu_meas, landmarks, landmarks_xyz, ii, time_idx, intrinsics, confidences, Sigma, V, lamda_init, poses_gt_eci, initialize=False, use_reg=True):
 	states = states.double()
 	v = velocities.double()
 	imu_meas = imu_meas.double()
@@ -104,6 +105,8 @@ def BA_reg(iter, states, velocities, states_prior, velocity_prior, imu_meas, lan
 	intrinsics = intrinsics.double()
 	quat_coeff = 100 #+ min(iter*10, 900)
 	vel_coeff = 100#00
+	quat_coeff_prior = 1
+	vel_coeff_prior = 1
 
 	bsz = states.shape[0]
 	landmark_est, Jg = landmark_project(states, landmarks_xyz, intrinsics, ii, jacobian=True)
@@ -113,9 +116,9 @@ def BA_reg(iter, states, velocities, states_prior, velocity_prior, imu_meas, lan
 		r_pred, pose_pred, vel_pred, Ji, Ji_1, Jf, Hq, qgrad = predict(states, imu_meas, time_idx, quat_coeff, vel_coeff, jacobian=True, initialize=initialize)
 	
 	if torch.cuda.is_available():
-		r_prior, Jp, Hqp, qgradp = prior_gpu(states, states_prior, quat_coeff, vel_coeff, jacobian=True, initialize=initialize)
+		r_prior, Jp, Hqp, qgradp = prior_gpu(states, states_prior, quat_coeff_prior, vel_coeff_prior, hessian_state_t, hessian_rot_t, jacobian=True, initialize=initialize)
 	else:
-		r_prior, Jp, Hqp, qgradp = prior_gpu(states, states_prior, quat_coeff, vel_coeff, jacobian=True, initialize=initialize)
+		r_prior, Jp, Hqp, qgradp = prior_gpu(states, states_prior, quat_coeff_prior, vel_coeff_prior, hessian_state_t, hessian_rot_t, jacobian=True, initialize=initialize)
 	r_obs = (landmarks - landmark_est)
 	alpha = min(max(1 - (2*(iter/5) - 1), 1), 2)
 	c_obs = r_obs.abs().median()
@@ -128,6 +131,7 @@ def BA_reg(iter, states, velocities, states_prior, velocity_prior, imu_meas, lan
 	Jg = Jg.reshape(bsz, -1, dim_base)[:, :, :dim].reshape(-1, 2, dim)
 	
 	JgTwJg = torch.bmm((Jg*wts_obs).transpose(1,2), Jg).reshape(bsz, -1, dim, dim)
+	ipdb.set_trace()
 
 	n = states.shape[1]
 	ii_t = torch.tensor(ii, dtype=torch.long, device=states.device)
@@ -164,11 +168,11 @@ def BA_reg(iter, states, velocities, states_prior, velocity_prior, imu_meas, lan
 		states_new = torch.cat([position, rotation, vels], 2)
 		landmark_est = landmark_project(states_new, landmarks_xyz, intrinsics, ii, jacobian=False)
 		if torch.cuda.is_available():
-			r_pred1, _, _ = predict_gpu(states_new, imu_meas, time_idx, quat_coeff, vel_coeff, jacobian=False, initialize=initialize)
-			r_prior1 = prior_gpu(states_new, states_prior, quat_coeff, vel_coeff, jacobian=False, initialize=initialize) 
+			r_pred1, _, _ = predict_gpu(states_new, imu_meas, time_idx, quat_coeff_prior, vel_coeff, jacobian=False, initialize=initialize)
+			r_prior1 = prior_gpu(states_new, states_prior, quat_coeff_prior, vel_coeff, hessian_state_t, hessian_rot_t, jacobian=False, initialize=initialize) 
 		else:
-			r_pred1, _, _ = predict(states_new, imu_meas, time_idx, quat_coeff, vel_coeff, jacobian=False, initialize=initialize)
-			r_prior1 = prior_gpu(states_new, states_prior, quat_coeff, vel_coeff, jacobian=False, initialize=initialize)
+			r_pred1, _, _ = predict(states_new, imu_meas, time_idx, quat_coeff_prior, vel_coeff, jacobian=False, initialize=initialize)
+			r_prior1 = prior_gpu(states_new, states_prior, quat_coeff_prior, vel_coeff, hessian_state_t, hessian_rot_t, jacobian=False, initialize=initialize)
 		r_obs1 = (landmarks - landmark_est)*wts_obs[None, :, 0]
 		r_pred1 = r_pred1[:, :,  :dim].reshape(bsz, -1) * np.sqrt(Sigma)
 		r_prior1 = r_prior1[:, :,  :dim].reshape(bsz, -1)
@@ -200,6 +204,8 @@ def BA_reg(iter, states, velocities, states_prior, velocity_prior, imu_meas, lan
 	# 	print((states_new[0,:, :3]-poses_gt_eci[:, :3]).abs().norm(dim=-1).detach().numpy())
 	# 	print("r_pred :", r_pred[0,:].abs().mean(dim=-1))
 	# 	print(r_obs_frame.reshape(-1).detach().numpy())
-	return states_new, velocities, lamda_init
+
+	last_hessian = JTwJ[:, -dim:, -dim:]
+	return states_new, velocities, lamda_init, last_hessian
 
 

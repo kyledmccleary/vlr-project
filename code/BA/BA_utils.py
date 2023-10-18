@@ -91,8 +91,9 @@ def propagate_rotation_dynamics_init(quaternion, omegas, duration, dt, only_end=
         q_pred = q_pred[..., -1, :]
     return q_pred
 
-def propagate_dynamics_init(states, velocities, omega, tdiff, duration, dt):
+def propagate_dynamics_init(states, velocities, hessian, omega, tdiff, duration, dt):
     position, rotation = states[:,:3], states[:,3:7]
+    # concate the 4 corners of the hessian into a matrix 
     w = omega#[..., :3]#, imu_meas[..., 3:]
 
     position_beg, velocities_beg = propagate_orbit_dynamics_init(position, velocities, tdiff, dt, only_end=True)
@@ -103,6 +104,126 @@ def propagate_dynamics_init(states, velocities, omega, tdiff, duration, dt):
 
     states_t = torch.cat([position_t, quat_t, velocities_t], dim=-1)
     return states_t, velocities_t
+
+
+
+def compute_orbit_jacobian(x, i, dt):
+    def orbit_prop(x):
+        return RK4(x, i, dt).sum(dim=0).reshape(-1)
+    return torch.autograd.functional.jacobian(orbit_prop, (x), vectorize=True).reshape(-1, 6, 6)
+
+def propagate_orbit_dynamics_cov_init(position, velocities, duration, dt, sigma, Q=0, only_end=False):
+    x = torch.cat([position, velocities], dim=-1)
+    x_pred = [x]
+    sigma_pred = [sigma]
+    dt = dt*torch.ones_like(x)
+    for i in range(duration):
+        # Compute the Jacobian J_pos_vel of the dynamics
+        J_pos_vel = compute_orbit_jacobian(x, i, dt)  
+        x = RK4(x, i, dt)
+        sigma = J_pos_vel @ sigma @ J_pos_vel.transpose(-1,-2) + Q
+        x_pred.append(x)
+        sigma_pred.append(sigma)
+    x_pred = torch.stack(x_pred, dim=-2)
+    sigma_pred = torch.stack(sigma_pred, dim=-3)
+    if only_end:
+        x_pred = x_pred[..., -1, :]
+        sigma_pred = sigma_pred[..., -1, :, :]
+    pos_pred = x_pred[..., :3]
+    vel_pred = x_pred[..., 3:]
+    return pos_pred, vel_pred, sigma_pred
+
+def hat(v):
+    """
+    Compute the hat (skew-symmetric) operator for a batch of vectors.
+    :param v: Tensor with shape [batch_size, 3]
+    :return: Tensor with shape [batch_size, 3, 3]
+    """
+    zero = torch.zeros(v.shape, dtype=v.dtype, device=v.device)[...,:1]
+    vhat = torch.cat((zero, -v[..., 2:3], v[..., 1:2],
+                        v[..., 2:3], zero, -v[..., 0:1],
+                        -v[..., 1:2], v[..., 0:1], zero), dim=-1)#.view(-1, 3, 3)
+    vhat_shape = list(v.shape[:-1]) + [3, 3]
+    return vhat.view(vhat_shape)
+
+def L(q):
+    """
+    Compute the L matrix for a batch of quaternions.
+    :param q: Tensor with shape [batch_size, 4]
+    :return: Tensor with shape [batch_size, 4, 4]
+    """
+    s = q[..., 0:1]
+    v = q[..., 1:]
+    v_hat = hat(v)
+    sI_plus_v_hat = torch.eye(3, dtype=q.dtype, device=q.device) * s.unsqueeze(-1) + v_hat
+    L_mat = torch.cat((torch.cat((s, -v), dim=-1).unsqueeze(-2), torch.cat((v.unsqueeze(-1), sI_plus_v_hat), dim=-1)), dim=-2)
+    return L_mat#.view(-1, 4, 4)
+
+def qtoQ(q):
+    """
+    Convert a batch of quaternions to the Q matrices.
+    :param q: Tensor with shape [batch_size, 4]
+    :return: Tensor with shape [batch_size, 3, 3]
+    """
+    Tshape = list(q.shape[:-1]) + [4, 4]
+    Hshape = list(q.shape[:-1]) + [4, 3]
+    T = torch.diag_embed(torch.tensor([1, -1, -1, -1], dtype=q.dtype, device=q.device)).expand(Tshape) #q.shape[0], 4, 4)
+    H = torch.cat((torch.zeros((1, 3), dtype=q.dtype, device=q.device), torch.eye(3, dtype=q.dtype, device=q.device)), dim=-2).expand(Hshape)
+    
+    L_q = L(q)
+    # return H.t()*T*L(q)*T*L(q)*H
+    intermed = torch.matmul(torch.matmul(T, L_q), torch.matmul(T, L_q))
+    Q = torch.matmul(torch.matmul(H.transpose(-2, -1), intermed), H)
+    return Q#[..., 1:, 1:]  # Extracting the bottom right 3x3 block
+
+def compute_rot_jacobian(omega, dt):
+    dq = quaternion_exp(-dt * omega)
+    Y = qtoQ(dq)
+    return Y
+    
+def propagate_rotation_dynamics_cov_init(quaternion, omegas, duration, dt, sigma_rot, Q_rot=0, only_end=False):
+    q_pred = [quaternion]
+    sigma_q_pred = [sigma_rot]
+    for i in range(duration):
+        # Compute the Jacobian J_rot of the rotation dynamics
+        J_rot = compute_rot_jacobian(omegas[:, i], dt)  
+        quaternion_out = quaternion_multiply(quaternion, quaternion_exp(dt * omegas[:, i]))
+        # ipdb.set_trace()
+        sigma_rot = J_rot @ sigma_rot @ J_rot.transpose(-1,-2) + Q_rot
+        q_pred.append(quaternion_out)
+        sigma_q_pred.append(sigma_rot)
+        quaternion = quaternion_out
+    q_pred = torch.stack(q_pred, dim=-2)
+    sigma_q_pred = torch.stack(sigma_q_pred, dim=-3)
+    if only_end:
+        q_pred = q_pred[..., -1, :]
+        sigma_q_pred = sigma_q_pred[..., -1, :, :]
+    return q_pred, sigma_q_pred
+
+
+def propagate_dynamics_cov_init(states, velocities, hessian, omega, tdiff, duration, dt):
+    position, rotation = states[:,:3], states[:,3:7]
+    # concate the 4 corners of the hessian into a matrix 
+    hessian = hessian.reshape(-1, 9, 9)
+    hessian_pos_pos, hessian_pos_vel, hessian_vel_vel, hessian_vel_pos = hessian[:, :3, :3], hessian[:, :3, 6:], hessian[:, 6:, 6:], hessian[:, 6:, :3]
+    hessian_state = torch.cat([torch.cat([hessian_pos_pos, hessian_pos_vel], dim=-1), torch.cat([hessian_vel_pos, hessian_vel_vel], dim=-1)], dim=-2)
+    hessian_rot = hessian[:, 3:6, 3:6]
+    cov_rot = torch.inverse(hessian_rot)
+    cov_state = torch.inverse(hessian_state)
+    w = omega#[..., :3]#, imu_meas[..., 3:]
+
+    position_beg, velocities_beg, cov_state_beg = propagate_orbit_dynamics_cov_init(position, velocities, tdiff, dt, cov_state, only_end=True)
+    quat_beg, cov_rot_beg = propagate_rotation_dynamics_cov_init(rotation, w[:, :tdiff, :], tdiff, dt, cov_rot, only_end=True)
+
+    ipdb.set_trace()
+    position_t, velocities_t, cov_state_t = propagate_orbit_dynamics_cov_init(position_beg, velocities_beg, duration, dt, cov_state_beg, only_end=False)
+    quat_t, cov_rot_t = propagate_rotation_dynamics_cov_init(quat_beg, w[:, tdiff:, :], duration, dt, cov_rot_beg, only_end=False)
+
+    states_t = torch.cat([position_t, quat_t, velocities_t], dim=-1)
+    hessian_state_t = torch.inverse(cov_state_t)
+    hessian_rot_t = torch.inverse(cov_rot_t)
+    return states_t, velocities_t, hessian_state_t, hessian_rot_t
+
 
 def propagate_rotation_dynamics(quaternion, omegas, times, dt):#, jac=False):
     # ipdb.set_trace()
@@ -424,7 +545,7 @@ def predict_gpu(states, imu_meas, times, quat_coeff, vel_coeff, dt=1, jacobian=T
     
     return res_pred, pose_pred, vel_pred
 
-def prior_gpu(states, prop_states, vel_coeff, quat_coeff, jacobian=True, initialize=False):
+def prior_gpu(states, prop_states, vel_coeff, quat_coeff, hessian_state_t, hessian_rot_t, jacobian=True, initialize=False):
     bsz = states.shape[0]
     N = states.shape[1]
     prop_states = prop_states.cuda()
@@ -437,16 +558,26 @@ def prior_gpu(states, prop_states, vel_coeff, quat_coeff, jacobian=True, initial
     pos_prop = prop_states[:,:,:3]
     vel_prop = prop_states[:,:,7:]
     q_prop = prop_states[:,:,3:7]
+    hessian_rot_t = hessian_rot_t.cuda()
+    hessian_state_t = hessian_state_t.cuda()
     def res_reg(states):
         position = states[:,:,:3]
         rotation = states[:,:,3:7]
         velocities = states[:,:,7:]
-        res_reg_out = torch.cat([(pos_prop - position), (vel_prop-velocities)*vel_coeff, quat_coeff*(1 - torch.abs((q_prop*rotation).sum(dim=-1)).unsqueeze(-1))], 2)
+        Gq = attitude_jacobian(states[:,:,3:7]).detach()
+        Gqprop = attitude_jacobian(prop_states[:,:,3:7]).detach()
+        res_reg_state = (hessian_state_t*torch.cat([(pos_prop - position), (vel_prop-velocities)*vel_coeff], 2).unsqueeze(-2)).sum(dim=-1)
+        res_reg_rot = quat_coeff*(1 - torch.abs(q_prop[0,:,None,:]@Gqprop[0]@hessian_rot_t[0]@Gq[0].transpose(-1,-2)@rotation[0,...,None]))[None, :, :, 0]
+        res_reg_out = torch.cat([res_reg_state, res_reg_rot], dim=-1)
         return res_reg_out
     def res_reg_quat_only(states):
         rotation = states[:,:,3:7]
         q_prop = prop_states[:,:,3:7]
-        return quat_coeff*(1 - torch.abs((q_prop*rotation).sum(dim=-1)).unsqueeze(-1))
+        Gq = attitude_jacobian(states[:,:,3:7]).detach()
+        Gqprop = attitude_jacobian(prop_states[:,:,3:7]).detach()
+        res_reg_rot = quat_coeff*(1 - torch.abs(q_prop[0,:,None,:]@Gqprop[0]@hessian_rot_t[0]@Gq[0].transpose(-1,-2)@rotation[0,...,None]))[None, :, :, 0]
+        return res_reg_rot
+        # return quat_coeff*(1 - torch.abs((q_prop*rotation).sum(dim=-1)).unsqueeze(-1))
     def res_reg_sum(states):
         states = states.reshape(bsz, -1, 10)
         return res_reg(states).sum(dim=0)[:,:-1].reshape(-1)
