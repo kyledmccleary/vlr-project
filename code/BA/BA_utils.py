@@ -49,13 +49,33 @@ def landmark_project(poses, landmarks_xyz, intrinsics, ii, jacobian=True):
         return landmark_est, Jg
     return landmark_est
 
+def propagate_orbit_dynamics_skip(position, velocities, times, dt):
+    time_diffs = torch.tensor(times[1:] - times[:-1])
+    time_diffs = torch.cat([time_diffs, torch.ones_like(time_diffs[-1:])], dim=0)
+    max_time_diff = time_diffs.max()
+    x = torch.cat([position, velocities], dim=-1)
+    x_pred = []
+    max_steps_skip = 100
+    time_hops = time_diffs//max_steps_skip
+    dt = dt*torch.ones_like(x)
+    # ipdb.set_trace()
+    for i in range(time_hops.max()+1):
+        dt = (time_hops == i).float()*(time_diffs%max_steps_skip) + (time_hops > i).float()*max_steps_skip
+        dt = dt[None, :, None].expand(-1, -1, 6).to(x)
+        x = RK4(x, i, dt)
+        x_pred.append(x)
+    x_pred = torch.stack(x_pred, dim=-2)
+    x_pred = x_pred[..., torch.arange(len(time_diffs)), time_hops, :]
+    pos_pred = x_pred[..., :3]
+    vel_pred = x_pred[..., 3:]
+    return pos_pred, vel_pred
+
 def propagate_orbit_dynamics(position, velocities, times, dt):
     time_diffs = torch.tensor(times[1:] - times[:-1])
     time_diffs = torch.cat([time_diffs, torch.ones_like(time_diffs[-1:])], dim=0)
     max_time_diff = time_diffs.max()
     x = torch.cat([position, velocities], dim=-1)
     x_pred = []
-    x_shape = x.shape
     dt = dt*torch.ones_like(x)
     for i in range(max_time_diff):
         x = RK4(x, i, dt)
@@ -252,6 +272,87 @@ def propagate_rotation_dynamics(quaternion, omegas, times, dt):#, jac=False):
     # vel_pred = x_pred[:, :, 3:]
     return q_pred, jac_qpred
 
+def propagate_rotation_dynamics(quaternion, omegas, times, dt):#, jac=False):
+    # ipdb.set_trace()
+    time_diffs = torch.tensor(times[1:] - times[:-1])
+    time_diffs = torch.cat([time_diffs, torch.ones_like(time_diffs[-1:])], dim=0)
+    max_time_diff = time_diffs.max()
+    q_pred = []
+    bsz, N = quaternion.shape[:2]
+    jac_qpred = torch.eye(4)[None, None].repeat(bsz, N, 1, 1).double()
+    # quaternion = quaternion.reshape(-1, 4)
+    # omegas = omegas.reshape(-1, len(max_time_diff), 3)
+    # ipdb.set_trace()
+    for i in range(max_time_diff):
+        quaternion_out = quaternion_multiply(quaternion, quaternion_exp(dt * omegas[:, :, i]))
+        # if jac:
+        #     mask = (i < time_diffs)#[None, :, None, None]
+        #     jac_i = quaternion_jacobian(quaternion_exp(dt * omegas[:, :, i]))
+        #     jac_qpred[:, mask] = (jac_i[:,mask][..., None]*jac_qpred[:, mask, None]).sum(dim=-2)
+        q_pred.append(quaternion_out)
+        quaternion = quaternion_out
+    
+    q_pred = torch.stack(q_pred, dim=-2)
+    # q_pred = q_pred.reshape(bsz, -1, len(max_time_diff), 4)
+    q_pred = q_pred[:, torch.arange(len(time_diffs)), time_diffs-1]#torch.zeros_like(time_diffs-1)]
+    # pos_pred = x_pred[:, :, :3]
+    # vel_pred = x_pred[:, :, 3:]
+    return q_pred, jac_qpred
+
+def propagate_rotation_dynamics(quaternion, omegas, times, dt):#, jac=False):
+    # ipdb.set_trace()
+    time_diffs = torch.tensor(times[1:] - times[:-1])
+    time_diffs = torch.cat([time_diffs, torch.ones_like(time_diffs[-1:])], dim=0)
+    max_time_diff = time_diffs.max()
+    q_pred = []
+    bsz, N = quaternion.shape[:2]
+    jac_qpred = torch.eye(4)[None, None].repeat(bsz, N, 1, 1).double()
+    # quaternion = quaternion.reshape(-1, 4)
+    # omegas = omegas.reshape(-1, len(max_time_diff), 3)
+    # ipdb.set_trace()
+    for i in range(max_time_diff):
+        quaternion_out = quaternion_multiply(quaternion, quaternion_exp(dt * omegas[:, :, i]))
+        # if jac:
+        #     mask = (i < time_diffs)#[None, :, None, None]
+        #     jac_i = quaternion_jacobian(quaternion_exp(dt * omegas[:, :, i]))
+        #     jac_qpred[:, mask] = (jac_i[:,mask][..., None]*jac_qpred[:, mask, None]).sum(dim=-2)
+        q_pred.append(quaternion_out)
+        quaternion = quaternion_out
+    
+    q_pred = torch.stack(q_pred, dim=-2)
+    # q_pred = q_pred.reshape(bsz, -1, len(max_time_diff), 4)
+    q_pred = q_pred[:, torch.arange(len(time_diffs)), time_diffs-1]#torch.zeros_like(time_diffs-1)]
+    # pos_pred = x_pred[:, :, :3]
+    # vel_pred = x_pred[:, :, 3:]
+    return q_pred, jac_qpred
+
+def precompute_cum_rotations(omegas, dt):
+    # Step 1: Compute the exponential of all the omegas
+    rotations = quaternion_exp(dt * omegas)
+    
+    # Step 2: Compute the cumulative product of these rotations
+    cum_rotations = [rotations[:, :, 0]]
+    for i in range(1, rotations.shape[2]):
+        cum_rot = quaternion_multiply(cum_rotations[-1], rotations[:, :, i])
+        cum_rotations.append(cum_rot)
+    cum_rotations = torch.stack(cum_rotations, dim=-2)
+    return cum_rotations
+
+def propagate_rotation_dynamics_precomp(quaternion, cum_rotations, times, dt):
+    time_diffs = torch.tensor(times[1:] - times[:-1])
+    time_diffs = torch.cat([time_diffs, torch.ones_like(time_diffs[-1:])], dim=0)
+
+    # cum_rotation = precompute_cum_rotations(omegas, dt)[:,:,-1]
+    cum_rotation = cum_rotations[:, :, -1]
+    # Step 3: Multiply the initial quaternion by the aggregate rotations
+    q_pred = quaternion_multiply(quaternion, cum_rotation)
+    # q_pred = q_pred[:, torch.arange(len(time_diffs)), time_diffs-1]
+    
+    # The Jacobian remains the same as in your original code
+    bsz, N = quaternion.shape[:2]
+    jac_qpred = torch.eye(4)[None, None].repeat(bsz, N, 1, 1).double()
+    
+    return q_pred, jac_qpred
 
 def predict_GN(poses, velocities, imu_meas, times, quat_coeff, dt=1, jacobian=True):
     w, a = imu_meas[..., :3], imu_meas[..., 3:]
@@ -405,7 +506,7 @@ def predict_vel(poses, velocities, imu_meas, times, quat_coeff, dt=1, jacobian=T
     return res_pred, pose_pred, vel_pred
 
 def predict(states, imu_meas, times, quat_coeff, vel_coeff, dt=1, jacobian=True, initialize=False):
-    w, a = imu_meas[..., :3], imu_meas[..., 3:]
+    w, a, cum_rots = imu_meas[..., :3], imu_meas[..., 3:6], imu_meas[..., 6:]
     bsz = states.shape[0]
     N = states.shape[1]
     num_res = (N-1)*6
@@ -419,7 +520,8 @@ def predict(states, imu_meas, times, quat_coeff, vel_coeff, dt=1, jacobian=True,
         rotation = states[:,:,3:7]
         velocities = states[:,:,7:]
         pos_pred, vel_pred = propagate_orbit_dynamics(position, velocities, times, dt)
-        q_pred, jac_qpred = propagate_rotation_dynamics(rotation, w, times, dt)#, jac)
+        # q_pred, jac_qpred = propagate_rotation_dynamics(rotation, w, times, dt)#, jac)
+        q_pred, _ = propagate_rotation_dynamics_precomp(rotation, cum_rots, times, dt)
         jac_ppred = torch.eye(3,3)[None, None].repeat(bsz, N, 1, 1)
         state_pred = torch.cat([pos_pred, q_pred, vel_pred], 2) 
         res_pred = torch.cat([(pos_pred[:,:-1] - position[:,1:]), (vel_pred[:,:-1]-velocities[:,1:])*vel_coeff, quat_coeff*(1 - torch.abs((q_pred[:,:-1]*rotation[:,1:]).sum(dim=-1)).unsqueeze(-1))], 2)
@@ -431,7 +533,8 @@ def predict(states, imu_meas, times, quat_coeff, vel_coeff, dt=1, jacobian=True,
         position = states[:,:,:3]
         rotation = states[:,:,3:7]
         velocities = states[:,:,7:]
-        q_pred, jac_qpred = propagate_rotation_dynamics(rotation, w, times, dt)#, jac)
+        # q_pred, jac_qpred = propagate_rotation_dynamics(rotation, w, times, dt)#, jac)
+        q_pred, _ = propagate_rotation_dynamics_precomp(rotation, cum_rots, times, dt)
         return quat_coeff*(1 - torch.abs((q_pred[:,:-1]*rotation[:,1:]).sum(dim=-1)).unsqueeze(-1))
     def res_preds_sum(states):
         states = states.reshape(bsz, -1, 10)
@@ -475,7 +578,7 @@ def predict(states, imu_meas, times, quat_coeff, vel_coeff, dt=1, jacobian=True,
     return res_pred, pose_pred, vel_pred
 
 def predict_gpu(states, imu_meas, times, quat_coeff, vel_coeff, dt=1, jacobian=True, initialize=False):
-    w, a = imu_meas[..., :3].cuda(), imu_meas[..., 3:]
+    w, a, cum_rots = imu_meas[..., :3].cuda(), imu_meas[..., 3:6], imu_meas[..., 6:].cuda()
     bsz = states.shape[0]
     N = states.shape[1]
     num_res = (N-1)*6
@@ -488,8 +591,11 @@ def predict_gpu(states, imu_meas, times, quat_coeff, vel_coeff, dt=1, jacobian=T
         position = states[:,:,:3]
         rotation = states[:,:,3:7]
         velocities = states[:,:,7:]
-        pos_pred, vel_pred = propagate_orbit_dynamics(position, velocities, times, dt)
-        q_pred, jac_qpred = propagate_rotation_dynamics(rotation, w, times, dt)#, jac)
+        # pos_pred, vel_pred = propagate_orbit_dynamics(position, velocities, times, dt)
+        pos_pred, vel_pred = propagate_orbit_dynamics_skip(position, velocities, times, dt)
+        # q_pred, jac_qpred = propagate_rotation_dynamics(rotation, w, times, dt)#, jac)
+        q_pred, _ = propagate_rotation_dynamics_precomp(rotation, cum_rots, times, dt)#, jac)
+        # ipdb.set_trace()
         jac_ppred = torch.eye(3,3)[None, None].repeat(bsz, N, 1, 1)
         state_pred = torch.cat([pos_pred, q_pred, vel_pred], 2) 
         res_pred = torch.cat([(pos_pred[:,:-1] - position[:,1:]), (vel_pred[:,:-1]-velocities[:,1:])*vel_coeff, quat_coeff*(1 - torch.abs((q_pred[:,:-1]*rotation[:,1:]).sum(dim=-1)).unsqueeze(-1))], 2)
@@ -501,7 +607,8 @@ def predict_gpu(states, imu_meas, times, quat_coeff, vel_coeff, dt=1, jacobian=T
         position = states[:,:,:3]
         rotation = states[:,:,3:7]
         velocities = states[:,:,7:]
-        q_pred, jac_qpred = propagate_rotation_dynamics(rotation, w, times, dt)#, jac)
+        # q_pred, jac_qpred = propagate_rotation_dynamics(rotation, w, times, dt)#, jac)
+        q_pred, _ = propagate_rotation_dynamics_precomp(rotation, cum_rots, times, dt)#, jac)
         return quat_coeff*(1 - torch.abs((q_pred[:,:-1]*rotation[:,1:]).sum(dim=-1)).unsqueeze(-1))
     def res_preds_sum(states):
         states = states.reshape(bsz, -1, 10)

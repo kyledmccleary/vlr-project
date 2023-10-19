@@ -180,7 +180,7 @@ def read_detections(sample_dets=False):
     # landmarks = np.load("landmarks/detections_out.npy", allow_pickle=True)
     # landmarks = np.load("landmarks/detections_new.npy", allow_pickle=True)
     # landmarks = np.load("landmarks/detections17R2.npy", allow_pickle=True)
-    id = 1
+    id = 2
     landmarks = np.load(f"landmarks/sequences/detections{id}wt.npy", allow_pickle=True)
     if id < 3:
         landmarks[:,0] += 1
@@ -202,12 +202,12 @@ def read_detections(sample_dets=False):
     filler_offset = 0
     time_idx_new = []
     for i, tidx in enumerate(time_idx):
-        # if tidx == filler_idx*1000:
-        #     filler_idx += 1
-        # while tidx > filler_idx*1000:
-        #     time_idx_new.append(filler_idx*1000)
-        #     filler_idx += 1
-        #     filler_offset += 1
+        if tidx == filler_idx*1000:
+            filler_idx += 1
+        while tidx > filler_idx*1000:
+            time_idx_new.append(filler_idx*1000)
+            filler_idx += 1
+            filler_offset += 1
         time_idx_new.append(tidx)
         num_points = ((landmarks[:,0])==tidx).sum()
         ii = ii + [i+filler_offset]*num_points
@@ -322,8 +322,8 @@ def full_batch_optimization():
     gt_omega = compute_omega_from_quat(gt_quat_eci_full, dt)
     # velocities = torch.zeros((1, T, N, 3))
     velocities = gt_vel_eci[time_idx].unsqueeze(0).double()
-    omegas = torch.zeros((1, T, N, 3))
-    accelerations = torch.zeros((1, T, N, 3))
+    omegas = torch.zeros((1, T, N, 3)).double()
+    accelerations = torch.zeros((1, T, N, 3)).double()
     # ipdb.set_trace()
     for i in range(1, T):
         # velocities[:, i-1, :time_idx[i]-time_idx[i-1], :] = gt_vel_eci[time_idx[i-1]:time_idx[i], :].unsqueeze(0).double()
@@ -332,8 +332,8 @@ def full_batch_optimization():
             accelerations[:, i-1, :time_idx[i]-time_idx[i-1], :] = gt_acceleration[time_idx[i-1]:time_idx[i], :].unsqueeze(0).double()
         except:
             ipdb.set_trace()
-    ipdb.set_trace()
-    imu_meas = torch.cat((omegas, accelerations), dim=-1)   # for now, assume that the IMU gives us the accurate angular velocity and acceleration (we don't use the accelerations, we just use the dynamics)
+    cum_rotations = precompute_cum_rotations(omegas, dt)
+    imu_meas = torch.cat((omegas, accelerations, cum_rotations), dim=-1)   # for now, assume that the IMU gives us the accurate angular velocity and acceleration (we don't use the accelerations, we just use the dynamics)
     position_offset = torch.randn((T, 3))*100
     orientation_offset = torch.randn([T, 3])*0.2
     velocity_offset = torch.randn([T, 3])*velocities.abs().mean()*0.1
@@ -348,7 +348,7 @@ def full_batch_optimization():
     lamda_init = 1e-4
 
     for i in range(num_iters):
-        states, velocities, lamda_init = BA(i-10, states, velocities, imu_meas, landmarks_uv, landmarks_xyz, ii, time_idx, intrinsics, confidences, Sigma, V, lamda_init, poses_gt_eci, initialize=(i<10))
+        states, velocities, lamda_init, _ = BA(i-10, states, velocities, imu_meas, landmarks_uv, landmarks_xyz, ii, time_idx, intrinsics, confidences, Sigma, V, lamda_init, poses_gt_eci, initialize=(i<10))
         if i==9:
             ipdb.set_trace()
 
@@ -870,5 +870,5 @@ def streaming_debugging():
 
 
 if __name__ == "__main__":
-    # full_batch_optimization()
-    streaming_debugging()
+    full_batch_optimization()
+    # streaming_debugging()
