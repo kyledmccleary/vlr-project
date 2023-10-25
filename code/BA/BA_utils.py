@@ -111,7 +111,7 @@ def propagate_rotation_dynamics_init(quaternion, omegas, duration, dt, only_end=
         q_pred = q_pred[..., -1, :]
     return q_pred
 
-def propagate_dynamics_init(states, velocities, hessian, omega, tdiff, duration, dt):
+def propagate_dynamics_init(states, velocities, omega, tdiff, duration, dt):
     position, rotation = states[:,:3], states[:,3:7]
     # concate the 4 corners of the hessian into a matrix 
     w = omega#[..., :3]#, imu_meas[..., 3:]
@@ -244,60 +244,6 @@ def propagate_dynamics_cov_init(states, velocities, hessian, omega, tdiff, durat
     hessian_rot_t = torch.inverse(cov_rot_t)
     return states_t, velocities_t, hessian_state_t, hessian_rot_t
 
-
-def propagate_rotation_dynamics(quaternion, omegas, times, dt):#, jac=False):
-    # ipdb.set_trace()
-    time_diffs = torch.tensor(times[1:] - times[:-1])
-    time_diffs = torch.cat([time_diffs, torch.ones_like(time_diffs[-1:])], dim=0)
-    max_time_diff = time_diffs.max()
-    q_pred = []
-    bsz, N = quaternion.shape[:2]
-    jac_qpred = torch.eye(4)[None, None].repeat(bsz, N, 1, 1).double()
-    # quaternion = quaternion.reshape(-1, 4)
-    # omegas = omegas.reshape(-1, len(max_time_diff), 3)
-    # ipdb.set_trace()
-    for i in range(max_time_diff):
-        quaternion_out = quaternion_multiply(quaternion, quaternion_exp(dt * omegas[:, :, i]))
-        # if jac:
-        #     mask = (i < time_diffs)#[None, :, None, None]
-        #     jac_i = quaternion_jacobian(quaternion_exp(dt * omegas[:, :, i]))
-        #     jac_qpred[:, mask] = (jac_i[:,mask][..., None]*jac_qpred[:, mask, None]).sum(dim=-2)
-        q_pred.append(quaternion_out)
-        quaternion = quaternion_out
-    
-    q_pred = torch.stack(q_pred, dim=-2)
-    # q_pred = q_pred.reshape(bsz, -1, len(max_time_diff), 4)
-    q_pred = q_pred[:, torch.arange(len(time_diffs)), time_diffs-1]#torch.zeros_like(time_diffs-1)]
-    # pos_pred = x_pred[:, :, :3]
-    # vel_pred = x_pred[:, :, 3:]
-    return q_pred, jac_qpred
-
-def propagate_rotation_dynamics(quaternion, omegas, times, dt):#, jac=False):
-    # ipdb.set_trace()
-    time_diffs = torch.tensor(times[1:] - times[:-1])
-    time_diffs = torch.cat([time_diffs, torch.ones_like(time_diffs[-1:])], dim=0)
-    max_time_diff = time_diffs.max()
-    q_pred = []
-    bsz, N = quaternion.shape[:2]
-    jac_qpred = torch.eye(4)[None, None].repeat(bsz, N, 1, 1).double()
-    # quaternion = quaternion.reshape(-1, 4)
-    # omegas = omegas.reshape(-1, len(max_time_diff), 3)
-    # ipdb.set_trace()
-    for i in range(max_time_diff):
-        quaternion_out = quaternion_multiply(quaternion, quaternion_exp(dt * omegas[:, :, i]))
-        # if jac:
-        #     mask = (i < time_diffs)#[None, :, None, None]
-        #     jac_i = quaternion_jacobian(quaternion_exp(dt * omegas[:, :, i]))
-        #     jac_qpred[:, mask] = (jac_i[:,mask][..., None]*jac_qpred[:, mask, None]).sum(dim=-2)
-        q_pred.append(quaternion_out)
-        quaternion = quaternion_out
-    
-    q_pred = torch.stack(q_pred, dim=-2)
-    # q_pred = q_pred.reshape(bsz, -1, len(max_time_diff), 4)
-    q_pred = q_pred[:, torch.arange(len(time_diffs)), time_diffs-1]#torch.zeros_like(time_diffs-1)]
-    # pos_pred = x_pred[:, :, :3]
-    # vel_pred = x_pred[:, :, 3:]
-    return q_pred, jac_qpred
 
 def propagate_rotation_dynamics(quaternion, omegas, times, dt):#, jac=False):
     # ipdb.set_trace()

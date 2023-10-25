@@ -92,6 +92,7 @@ def od_pipe(data, orbit_lat_long):
 def process_ground_truths(orbit, landmarks_dict, intrinsics, dt, time_idx):
 
     gt_pos_eci = orbit[time_idx,:3]
+    gt_pos_eci_full = orbit[:,:3]
     #convert_latlong_to_cartesian(orbit_lat_long[:,1], orbit_lat_long[:,0], altitudes)
     gt_vel_eci = compute_velocity_from_pos(orbit[:,:3], dt) 
     # zc, yc, xc = convert_quaternion_to_xyz_orientation(orbit[:,6:10], np.arange(len(orbit)))
@@ -112,7 +113,8 @@ def process_ground_truths(orbit, landmarks_dict, intrinsics, dt, time_idx):
     landmarks_xyz = torch.tensor(landmarks_xyz)
     landmarks_uv = torch.tensor(landmarks_uv).double()
     intrinsics = torch.tensor(intrinsics).unsqueeze(0).repeat(len(gt_pos_eci), 1)
-    return gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_quat_eci_full, landmarks_xyz, landmarks_uv, intrinsics, gt_acceleration
+    gt_pos_eci_full = torch.tensor(gt_pos_eci_full)
+    return gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_quat_eci_full, landmarks_xyz, landmarks_uv, intrinsics, gt_acceleration, gt_pos_eci_full
 
 def read_data(sample_dets=False):
     if not sample_dets:
@@ -297,7 +299,7 @@ def full_batch_optimization():
     sample_dets = False
     # orbit, landmarks_dict, intrinsics, time_idx, ii = read_data(sample_dets)
     orbit, landmarks_dict, intrinsics, time_idx, ii = read_detections(sample_dets)
-    gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_quat_eci_full, landmarks_xyz, landmarks_uv, intrinsics, gt_acceleration = process_ground_truths(orbit, landmarks_dict, intrinsics, dt, time_idx)
+    gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_quat_eci_full, landmarks_xyz, landmarks_uv, intrinsics, gt_acceleration, gt_pos_eci_full = process_ground_truths(orbit, landmarks_dict, intrinsics, dt, time_idx)
 
     ### Obtain acceleration from orbital dynamics and angular velocity from IMU
     states_gt_eci = torch.cat([poses_gt_eci, gt_vel_eci[time_idx]], dim=-1)
@@ -869,6 +871,148 @@ def streaming_debugging():
         ipdb.set_trace()
 
 
+def identify_next_batch_(ii, time_idx, i, t):
+    contiguous_patch_count = 0
+    for j in range(i+1, len(ii)):
+        if time_idx[ii[j]] - time_idx[ii[j-1]] < 100:
+            contiguous_patch_count += 1
+        if time_idx[ii[j]] - time_idx[ii[j-1]] > 200 and contiguous_patch_count > 4:
+            return ii[j-1]+1, j, False
+    return ii[-1]+1, len(ii), True
+
+def compute_residuals(states, gt_states):
+    r = (states - gt_states)[...,:3].reshape(-1, 3).norm(dim=-1)
+    return r
+
+def streaming_version():
+    ### Specify hyperparameters
+    seeding(0)
+    h = 1 # Frequency = 1 Hz
+    dt = 1/h
+    V = 1e-3
+    Sigma = 1e-3
+    num_iters = 20
+    torch.set_printoptions(precision=4, sci_mode=False)
+
+    ### Read data 
+    sample_dets = False
+    # orbit, landmarks_dict, intrinsics, time_idx, ii = read_data(sample_dets)
+    orbit, landmarks_dict, intrinsics, time_idx, ii = read_detections(sample_dets)
+    gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_quat_eci_full, landmarks_xyz, landmarks_uv, intrinsics, gt_acceleration, gt_pos_eci_full = process_ground_truths(orbit, landmarks_dict, intrinsics, dt, time_idx)
+
+    ### Obtain acceleration from orbital dynamics and angular velocity from IMU
+    states_gt_eci = torch.cat([poses_gt_eci, gt_vel_eci[time_idx]], dim=-1)
+    landmark_uv_proj = landmark_project(states_gt_eci.unsqueeze(0), landmarks_xyz.unsqueeze(0), intrinsics.unsqueeze(0), ii, jacobian=False)
+    mask = ((landmark_uv_proj[:, :, 0] > 0)*(landmark_uv_proj[:, :, 1] > 0)*(landmark_uv_proj[:, :, 0] < 2600)*(landmark_uv_proj[:, :, 1] < 2000)*((landmark_uv_proj - landmarks_uv[None]).norm(dim=-1)<1000)*(torch.tensor(landmarks_dict["confidence"])>0.8) )[0]
+    print("mean landmark difference : ", ((landmark_uv_proj[0,:] - landmarks_uv)).abs().mean(dim=0))
+    print(torch.cat([(landmark_uv_proj[0,:] - landmarks_uv), torch.tensor(landmarks_dict["confidence"])[:,None], landmark_uv_proj[0]], dim=-1)[:20])
+    # ii = ii[mask]#[:-5]
+    gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_quat_eci_full, landmarks_xyz, landmarks_uv, intrinsics, gt_acceleration, ii, time_idx, mask = remove_elems(mask, gt_pos_eci, gt_vel_eci, poses_gt_eci, gt_quat_eci, gt_quat_eci_full, landmarks_xyz, landmarks_uv, intrinsics, gt_acceleration, ii, time_idx)
+    landmarks_xyz, landmarks_uv, landmark_uv_proj = landmarks_xyz[mask], landmarks_uv[mask], landmark_uv_proj[:, mask]
+    # landmarks_xyz, landmarks_uv, landmark_uv_proj = landmarks_xyz[mask][:-5], landmarks_uv[mask][:-5], landmark_uv_proj[:, mask][:,:-5]#, ii[mask][:-5]
+    confidences = torch.tensor(landmarks_dict["confidence"])[mask].double()#[:-5]
+    # landmarks_xyz, landmarks_uv, landmark_uv_proj, ii, confidences = add_proxy_landmarks(landmarks_xyz, landmarks_uv, landmark_uv_proj, ii, intrinsics, poses_gt_eci, confidences)
+    print("mean landmark difference : ", ((landmark_uv_proj[0,:] - landmarks_uv)).abs().mean(dim=0))
+    ipdb.set_trace()
+    noise_level = 1.0
+    landmarks_uv += (landmark_uv_proj[0, :] - landmarks_uv)*(1-noise_level)
+        
+    ### Initial guess for poses, velocities
+    T = len(gt_pos_eci)
+    N  = max(time_idx[1:] - time_idx[:-1])
+    gt_omega = compute_omega_from_quat(gt_quat_eci_full, dt)
+    # velocities = torch.zeros((1, T, N, 3))
+    velocities = gt_vel_eci[time_idx].unsqueeze(0).double()
+    omegas = torch.zeros((1, T, N, 3)).double()
+    accelerations = torch.zeros((1, T, N, 3)).double()
+    # ipdb.set_trace()
+    for i in range(1, T):
+        # velocities[:, i-1, :time_idx[i]-time_idx[i-1], :] = gt_vel_eci[time_idx[i-1]:time_idx[i], :].unsqueeze(0).double()
+        try:
+            omegas[:, i-1, :time_idx[i]-time_idx[i-1], :] = gt_omega[time_idx[i-1]:time_idx[i], :].unsqueeze(0).double()
+            accelerations[:, i-1, :time_idx[i]-time_idx[i-1], :] = gt_acceleration[time_idx[i-1]:time_idx[i], :].unsqueeze(0).double()
+        except:
+            ipdb.set_trace()
+    cum_rotations = precompute_cum_rotations(omegas, dt)
+    imu_meas = torch.cat((omegas, accelerations, cum_rotations), dim=-1)   # for now, assume that the IMU gives us the accurate angular velocity and acceleration (we don't use the accelerations, we just use the dynamics)
+    position_offset = torch.randn((T, 3))*100
+    orientation_offset = torch.randn([T, 3])*0.2
+    velocity_offset = torch.randn([T, 3])*velocities.abs().mean()*0.1
+    position = poses_gt_eci.double()[:, :3] + position_offset
+    orientation = quaternion_exp(quaternion_log(poses_gt_eci.double()[:, 3:]) + orientation_offset)
+    vels = velocities.double() + velocity_offset.unsqueeze(0)
+    poses = torch.cat([position, orientation], dim=1).unsqueeze(0)
+    states = torch.cat([poses, vels], dim=-1)
+    landmarks_uv = landmarks_uv.unsqueeze(0)
+    landmarks_xyz = landmarks_xyz.unsqueeze(0)
+    intrinsics = intrinsics.unsqueeze(0)
+    lamda_init = 1e-4
+
+    # for i in range(num_iters):
+    #     states, velocities, lamda_init, _ = BA(i-10, states, velocities, imu_meas, landmarks_uv, landmarks_xyz, ii, time_idx, intrinsics, confidences, Sigma, V, lamda_init, poses_gt_eci, initialize=(i<10))
+    #     if i==9:
+    #         ipdb.set_trace()
+
+    t = 0
+    i = 0
+    seq_end = False
+    patch_id = 0
+    errors = []
+    # ipdb.set_trace()
+    while not seq_end:
+        t_init = t
+        i_init = i
+        t_final, i_final, seq_end = identify_next_batch(ii, time_idx, i, t)
+        t = t_final
+        i = i_final
+        if patch_id == 0:
+            states_t = states[:,:t_final]
+            velocities_t = velocities[:,:t_final]
+            imu_meas_t = imu_meas[:,:t_final]
+            intrinsics_t = intrinsics[:,:t_final]
+            ii_t = ii[:i_final] #- ii[i_init]
+            time_idx_t = time_idx[:t_final]
+            poses_gt_eci_t = poses_gt_eci[:t_final]
+            states_prop_full = states_t.clone()
+            velocities_prop_full = velocities_t.clone() 
+            first_detection = time_idx_t[-1]
+        else:
+            # ipdb.set_trace()
+            omega = gt_omega[time_idx[t_init-1]:time_idx[t_final-1]].unsqueeze(0).double()
+            tdiff = time_idx[t_init] - time_idx[t_init-1]
+            duration = time_idx[t_final-1] - time_idx[t_init] #+ 1
+            states_prop_full, velocities_prop_full = propagate_dynamics_init(states_t[:, -1], velocities_t[:,-1], omega, tdiff, duration, 1)
+            time_idx_prop = time_idx[t_init:t_final]
+            states_prop, velocities_prop = states_prop_full[:,time_idx_prop - time_idx_prop[0]], velocities_prop_full[:,time_idx_prop - time_idx_prop[0]]
+            imu_meas_t = imu_meas[:,:t_final]
+            intrinsics_t = intrinsics[:,:t_final]
+            ii_t = ii[:i_final]# - ii[i_init]
+            time_idx_t = time_idx[:t_final]
+            poses_gt_eci_t = poses_gt_eci[:t_final]
+            states_t = torch.cat([states_t, states_prop], dim=1)
+            velocities_t = torch.cat([velocities_t, velocities_prop], dim=1)
+            ipdb.set_trace()
+            error_prop = compute_residuals(states_prop_full[0, :, :3], gt_pos_eci_full[time_idx_prop[0]:time_idx_prop[-1]+1])[:-1]
+            errors.append(error_prop)
+        # ipdb.set_trace()
+        print("interval : ", t_init, t_final, time_idx_t)
+        # confidences_t = confidences[i_init:i_final]
+        lamda_init_t = lamda_init
+        states_t_prior = states_t.clone()
+        velocities_t_prior = velocities_t.clone()
+        for iter in range(num_iters):
+            if patch_id == 0:
+                states_t, velocities_t, lamda_init_t, last_hessian = BA(iter-10, states_t, velocities_t, imu_meas_t, landmarks_uv[:, :i_final], landmarks_xyz[:, :i_final], ii_t, time_idx_t, intrinsics_t, confidences[:i_final], Sigma, V, lamda_init_t, poses_gt_eci_t, initialize=(iter<10))
+            else:
+                states_t, velocities_t, lamda_init_t, last_hessian = BA(iter, states_t, velocities_t, imu_meas_t, landmarks_uv[:, :i_final], landmarks_xyz[:, :i_final], ii_t, time_idx_t, intrinsics_t, confidences[:i_final], Sigma, V, lamda_init_t, poses_gt_eci_t, initialize=False)
+        patch_id += 1
+        error_t = (states_t[..., :3].reshape(-1, 3)[-1:] - poses_gt_eci_t[-1:, :3]).norm(dim=-1)
+        errors.append(error_t)
+        ipdb.set_trace()
+    errors = torch.cat(errors)
+    return errors, first_detection
 if __name__ == "__main__":
-    full_batch_optimization()
+
+    streaming_version()
+    # full_batch_optimization()
     # streaming_debugging()
