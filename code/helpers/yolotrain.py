@@ -1,10 +1,9 @@
-from ultralytics import YOLO
+from yolo_custom_trainer import CustomYOLO
 
-model = YOLO('yolov8s.pt', task='detect')
-model.to('cuda')
-
-if __name__ == '__main__':
-    results = model.train(
+def get_model():
+    args = dict(
+        model = 'yolov8s.pt',
+        task = 'detect',
         data='yolov8n_cc5.yaml',
         degrees=180,
         scale=0.1,
@@ -17,3 +16,12 @@ if __name__ == '__main__':
         resume=False,
         # hsv_h=0.055,
         name='33S_s')
+    
+    return CustomYOLO(args)
+
+
+if __name__ == '__main__':
+    model = get_model()
+    model.to('cuda')
+
+    results = model.train()
