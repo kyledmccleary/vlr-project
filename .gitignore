@@ -10,4 +10,5 @@ datasets/
 *.yaml
 lisp/
 
-
+runs/
+__pycache__/

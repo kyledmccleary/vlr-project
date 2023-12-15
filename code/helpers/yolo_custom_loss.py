@@ -11,6 +11,8 @@ from ultralytics.utils.tal import TaskAlignedAssigner, dist2bbox, make_anchors
 from ultralytics.utils.metrics import bbox_iou
 from ultralytics.utils.tal import bbox2dist
 
+from ultralytics.utils import LOGGER
+
 
 class VarifocalLoss(nn.Module):
     """
@@ -61,7 +63,7 @@ class FocalLoss(nn.Module):
 class BboxLoss(nn.Module):
     """Criterion class for computing training losses during training."""
 
-    def __init__(self, reg_max, use_dfl=False):
+    def __init__(self, reg_max, use_dfl=True):
         """Initialize the BboxLoss module with regularization maximum and DFL settings."""
         super().__init__()
         self.reg_max = reg_max
@@ -70,20 +72,38 @@ class BboxLoss(nn.Module):
     def forward(self, pred_dist, pred_bboxes, anchor_points, target_bboxes, target_scores, target_scores_sum, fg_mask):
         """IoU loss."""
         weight = target_scores.sum(-1)[fg_mask].unsqueeze(-1)
+        iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, CIoU=True)
+        loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
 
-        # CUSTOM - Calculate Center Loss
-        loss_ctr = self._ctr_loss(pred_bboxes[fg_mask], target_bboxes[fg_mask]) * weight
-        loss_ctr = loss_ctr.sum() / target_scores_sum
+        loss_ctr = self._ctr_loss(pred_bboxes[fg_mask], target_bboxes[fg_mask])
+        # LOGGER.info(f"[DEBUG] {target_bboxes[fg_mask]}")
+        x1 =  target_bboxes[fg_mask][:,0]
+        y1 =  target_bboxes[fg_mask][:,1]
+        x2 =  target_bboxes[fg_mask][:,2]
+        y2 =  target_bboxes[fg_mask][:,3]
 
-        # CUSTOM - Remove DFL loss
-        loss_dfl = torch.tensor(0.0).to(pred_dist.device)
+        # LOGGER.info(f"[DEBUG] ctr = {loss_ctr.size()} x1 = {x1.size()}")
+        loss_ctr = (loss_ctr / (torch.sqrt((x2 - x1)**2 + (y2 - y1)**2) ** 2)).sum()
+        loss_iou += loss_ctr
+        # LOGGER.info(f"\n[DEBUG] IOU Loss Shape = {loss_iou.size()} Center Loss = {loss_ctr.size()}")
+        # DFL loss
+        if self.use_dfl:
+            target_ltrb = bbox2dist(anchor_points, target_bboxes, self.reg_max)
+            loss_dfl = self._df_loss(pred_dist[fg_mask].view(-1, self.reg_max + 1), target_ltrb[fg_mask]) * weight
+            loss_dfl = loss_dfl.sum() / target_scores_sum
+        else:
+          loss_dfl = torch.tensor(0.0).to(pred_dist.device)
 
-        # CUSTOM - return center loss instead of IOU
-        return loss_ctr, loss_dfl
+        # return loss_ctr, loss_dfl
+        return loss_iou, loss_dfl
 
-    def _ctr_loss(self, pred, target):
-        # Calculate MSE loss between predicted and target centers, they are a tuple of x and y coordinates
-        return torch.sqrt(torch.pow((pred[0] - target[0]), 2) + torch.pow((pred[1] - target[1]), 2))
+    @staticmethod
+    def _ctr_loss(pred, target):
+      ctr_pred = ((pred[:,0] + pred[:,2]) / 2, (pred[:,1] + pred[:,3]) / 2)
+      ctr_target = ((target[:,0] + target[:,2]) / 2, (target[:,1] + target[:,3]) / 2)
+
+      # Calculate MSE loss between predicted and target centers, they are a tuple of x and y coordinates
+      return torch.sqrt(torch.pow((ctr_pred[0] - ctr_target[0]), 2) + torch.pow((ctr_pred[1] - ctr_target[1]), 2))
 
     @staticmethod
     def _df_loss(pred_dist, target):
@@ -528,3 +548,4 @@ class v8ClassificationLoss:
         loss = torch.nn.functional.cross_entropy(preds, batch['cls'], reduction='mean')
         loss_items = loss.detach()
         return loss, loss_items
+
